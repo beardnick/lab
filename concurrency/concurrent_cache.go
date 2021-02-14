@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/gin-gonic/gin"
-	"github.com/patrickmn/go-cache"
 	"net/http"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/patrickmn/go-cache"
 )
 
 type TryLock struct {
@@ -37,7 +38,7 @@ var cnt int64 = 0
 func GetData() string {
 	fmt.Println("hit db")
 	atomic.AddInt64(&dbCnt, 1)
-	time.Sleep(time.Microsecond * 100)
+	time.Sleep(time.Millisecond * 100)
 	return "the return data"
 }
 
@@ -66,15 +67,20 @@ func ConcurrentCache(c *gin.Context) {
 var try = TryLock{}
 
 func TryGetData() string {
-	data, ok := ca.Get("cache")
-	if !ok {
+	var data interface{}
+	for {
+		ok := true
+		data, ok = ca.Get("cache")
+		if ok {
+			break
+		}
 		if try.TryLock() {
 			data = GetData()
 			ca.Set("cache", data, time.Minute)
 			try.Unlock()
+			break
 		}
-		time.Sleep(time.Microsecond)
-		data = TryGetData()
+		time.Sleep(time.Millisecond)
 	}
 	return data.(string)
 }
@@ -102,7 +108,7 @@ func Hit(c *gin.Context) {
 
 func main() {
 	router := gin.Default()
-	router.GET("/data", ConcurrentCache)
+	router.GET("/data", ConcurrentCache2)
 	router.GET("/hit", Hit)
-	router.Run("127.0.0.1:9090")
+	router.Run("0.0.0.0:80")
 }
