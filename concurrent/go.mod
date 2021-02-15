@@ -1,4 +1,4 @@
-module concurrency
+module concurrent
 
 go 1.13
 
