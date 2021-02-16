@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"math/rand"
-	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -12,9 +11,16 @@ import (
 
 var rdb = redis.NewClient(&redis.Options{
 	Addr:     "",
-	Password: "", // no password set
-	DB:       0,  // use default DB
+	Password: "",
+	DB:       0,
 })
+
+var delEqual = redis.NewScript(`
+if redis.call("get",KEYS[1]) == ARGV[1] then 
+   return redis.call("del",KEYS[1])
+ else 
+   return 0
+ end`)
 
 type RedisLock struct {
 	Key    string
@@ -41,19 +47,8 @@ func (r *RedisLock) Lock() (err error) {
 }
 
 func (r *RedisLock) Unlock() (err error) {
-	i, err := rdb.Get(context.Background(), r.Key).Result()
-	if err != nil {
-		err = fmt.Errorf("lock may has expired:%v", err)
-		return
-	}
-	// 如果不是自己创建的锁就不能删除
-	if i != strconv.Itoa(r.id) {
-		fmt.Printf("not my lock want:%v get:%v\n", r.id, i)
-		return
-	}
-	// IMP: 在此刻这个锁如果变成了另外一个客户端的，则还是会删错锁
-	// 导致这个问题的原因是判断和删除操作不是原子的
-	_, err = rdb.Del(context.Background(), r.Key).Result()
+	//  使用lua脚本保证比较和删除操作的原子性
+	_, err = delEqual.Run(context.Background(), rdb, []string{r.Key}, r.id).Result()
 	if err != nil {
 		err = fmt.Errorf("lock may has expired:%v", err)
 		return
@@ -69,7 +64,7 @@ func main() {
 		panic(err)
 	}
 	fmt.Println("runing...")
-	time.Sleep(time.Second * 15)
+	time.Sleep(time.Second * 30)
 	err = l.Unlock()
 	if err != nil {
 		panic(err)
