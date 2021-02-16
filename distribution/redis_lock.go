@@ -22,7 +22,7 @@ type RedisLock struct {
 	Expire time.Duration
 }
 
-func (r RedisLock) Lock() (err error) {
+func (r *RedisLock) Lock() (err error) {
 	// 这里必须要有随机数种子，不然就会出现重复的随机数
 	rand.Seed(time.Now().Unix())
 	r.id = rand.Int()
@@ -40,7 +40,7 @@ func (r RedisLock) Lock() (err error) {
 	return
 }
 
-func (r RedisLock) Unlock() (err error) {
+func (r *RedisLock) Unlock() (err error) {
 	i, err := rdb.Get(context.Background(), r.Key).Result()
 	if err != nil {
 		err = fmt.Errorf("lock may has expired:%v", err)
@@ -48,6 +48,7 @@ func (r RedisLock) Unlock() (err error) {
 	}
 	// 如果不是自己创建的锁就不能删除
 	if i != strconv.Itoa(r.id) {
+		fmt.Printf("not my lock want:%v get:%v\n", r.id, i)
 		return
 	}
 	_, err = rdb.Del(context.Background(), r.Key).Result()
