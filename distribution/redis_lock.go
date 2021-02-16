@@ -51,6 +51,8 @@ func (r *RedisLock) Unlock() (err error) {
 		fmt.Printf("not my lock want:%v get:%v\n", r.id, i)
 		return
 	}
+	// IMP: 在此刻这个锁如果变成了另外一个客户端的，则还是会删错锁
+	// 导致这个问题的原因是判断和删除操作不是原子的
 	_, err = rdb.Del(context.Background(), r.Key).Result()
 	if err != nil {
 		err = fmt.Errorf("lock may has expired:%v", err)
