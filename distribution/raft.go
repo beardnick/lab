@@ -53,14 +53,14 @@ type Response struct {
 }
 
 type Node struct {
-	role    RaftRole
-	TimeOut time.Duration
-	Term    int
-	Ip      string
-	Port    string
-	Score   int
-	Cluster Cluster
-	Timer   *time.Timer
+	role    RaftRole      `json:"role,omitempty"`
+	TimeOut time.Duration `json:"time_out,omitempty"`
+	Term    int           `json:"term,omitempty"`
+	Ip      string        `json:"ip,omitempty"`
+	Port    string        `json:"port,omitempty"`
+	Score   int           `json:"score,omitempty"`
+	Cluster Cluster       `json:"-,omitempty"`
+	Timer   *time.Timer   `json:"-,omitempty"`
 }
 
 const (
@@ -119,11 +119,9 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 }
 
 func (c Console) Nodes() (insts []Instance, err error) {
-	resp := struct {
-		Code int        `json:"code,omitempty"`
-		Data []Instance `json:"data,omitempty"`
-		Msg  string     `json:"msg,omitempty"`
-	}{}
+	resp := Response{
+		Data: &insts,
+	}
 	_, err = resty.New().R().
 		SetResult(&resp).
 		Get(fmt.Sprintf("http://%s:%s/nodes", c.Ip, c.Port))
@@ -134,12 +132,6 @@ func (c Console) Nodes() (insts []Instance, err error) {
 		err = errors.New(resp.Msg)
 		return
 	}
-	//insts, ok := resp.Data.([]Instance)
-	//if !ok {
-	//    err = fmt.Errorf("not []Instance %+v", resp.Data)
-	//    return
-	//}
-	insts = resp.Data
 	return
 }
 
@@ -171,28 +163,18 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 	var (
 		err error
 	)
-	//resp := Response{
-	//    Data: VoteResult{},
-	//}
-	resp := struct {
-		Code int        `json:"code,omitempty"`
-		Data VoteResult `json:"data,omitempty"`
-		Msg  string     `json:"msg,omitempty"`
-	}{}
+	result := VoteResult{}
+	resp := Response{
+		Data: &result,
+	}
 	_, err = resty.New().R().
 		SetBody(req).
 		SetResult(&resp).
 		Post(fmt.Sprintf("http://%s:%s/vote", inst.Ip, inst.Port))
-	result := VoteResult{}
 	if err != nil || resp.Code != 0 {
 		result.Result = Reject
 		return
 	}
-	//result, ok := resp.Data.(VoteResult)
-	//if !ok {
-	//    result.Result = Reject
-	//}
-	result = resp.Data
 	respC <- result
 }
 
