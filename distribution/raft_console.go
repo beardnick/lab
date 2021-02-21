@@ -33,6 +33,12 @@ func RegisterHandler(c *gin.Context) {
 		})
 		return
 	}
+	for _, v := range nodes {
+		if v.Ip == n.Ip && v.Port == n.Port {
+			c.JSON(http.StatusOK, Response{})
+			return
+		}
+	}
 	nodes = append(nodes, n)
 	c.JSON(http.StatusOK, Response{})
 }

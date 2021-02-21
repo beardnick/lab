@@ -12,11 +12,25 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+type RaftRole int
+
 const (
-	Follower = iota
+	Follower RaftRole = iota
 	Leader
 	Candidate
 )
+
+func (r RaftRole) String() string {
+	switch r {
+	case Follower:
+		return "Follower"
+	case Leader:
+		return "Leader"
+	case Candidate:
+		return "Candidate"
+	}
+	return "Unknown raft role"
+}
 
 type Console struct {
 	Ip   string
@@ -39,13 +53,14 @@ type Response struct {
 }
 
 type Node struct {
-	Role    int
+	role    RaftRole
 	TimeOut time.Duration
 	Term    int
 	Ip      string
 	Port    string
 	Score   int
 	Cluster Cluster
+	Timer   *time.Timer
 }
 
 const (
@@ -62,7 +77,24 @@ type VoteReq struct {
 	Term int    `json:"term,omitempty"`
 }
 
-func VoteHandler(node Node) gin.HandlerFunc {
+func NodeHandler(node *Node) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.JSON(http.StatusOK, Response{
+			Data: node,
+		})
+		return
+	}
+}
+
+func HeartBeatHandler(node *Node) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		node.Timer.Reset(node.TimeOut)
+		c.JSON(http.StatusOK, Response{})
+		return
+	}
+}
+
+func VoteHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		v := VoteReq{}
 		err := c.ShouldBindJSON(&v)
@@ -73,12 +105,13 @@ func VoteHandler(node Node) gin.HandlerFunc {
 			})
 			return
 		}
-		if node.Role == Leader || node.Role == Candidate || node.Term > v.Term {
+		if node.Role() == Leader || node.Role() == Candidate || node.Term > v.Term {
 			c.JSON(http.StatusOK, Response{
 				Data: VoteResult{Reject},
 			})
 			return
 		}
+		node.Timer.Reset(node.TimeOut)
 		c.JSON(http.StatusOK, Response{
 			Data: VoteResult{Accept},
 		})
@@ -86,7 +119,28 @@ func VoteHandler(node Node) gin.HandlerFunc {
 }
 
 func (c Console) Nodes() (insts []Instance, err error) {
-	panic("not implemented")
+	resp := struct {
+		Code int        `json:"code,omitempty"`
+		Data []Instance `json:"data,omitempty"`
+		Msg  string     `json:"msg,omitempty"`
+	}{}
+	_, err = resty.New().R().
+		SetResult(&resp).
+		Get(fmt.Sprintf("http://%s:%s/nodes", c.Ip, c.Port))
+	if err != nil {
+		return
+	}
+	if resp.Code != 0 {
+		err = errors.New(resp.Msg)
+		return
+	}
+	//insts, ok := resp.Data.([]Instance)
+	//if !ok {
+	//    err = fmt.Errorf("not []Instance %+v", resp.Data)
+	//    return
+	//}
+	insts = resp.Data
+	return
 }
 
 func (c Console) Register(node Node) (err error) {
@@ -117,7 +171,14 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 	var (
 		err error
 	)
-	resp := Response{}
+	//resp := Response{
+	//    Data: VoteResult{},
+	//}
+	resp := struct {
+		Code int        `json:"code,omitempty"`
+		Data VoteResult `json:"data,omitempty"`
+		Msg  string     `json:"msg,omitempty"`
+	}{}
 	_, err = resty.New().R().
 		SetBody(req).
 		SetResult(&resp).
@@ -127,11 +188,21 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 		result.Result = Reject
 		return
 	}
-	result, ok := resp.Data.(VoteResult)
-	if !ok {
-		result.Result = Reject
-	}
+	//result, ok := resp.Data.(VoteResult)
+	//if !ok {
+	//    result.Result = Reject
+	//}
+	result = resp.Data
 	respC <- result
+}
+
+func (n *Node) SetRole(role RaftRole) {
+	fmt.Println(role)
+	n.role = role
+}
+
+func (n *Node) Role() RaftRole {
+	return n.role
 }
 
 func (n *Node) Vote() (err error) {
@@ -144,8 +215,15 @@ func (n *Node) Vote() (err error) {
 	if err != nil {
 		return
 	}
+	if len(insts) < 3 {
+		err = fmt.Errorf("at least 3 nodes but only %d", len(insts))
+		return
+	}
 	respC := make(chan VoteResult)
 	for _, i := range insts {
+		if i.Ip == n.Ip && i.Port == n.Port {
+			continue
+		}
 		go vote(req, i, respC)
 	}
 	n.Term = n.Term + 1
@@ -160,7 +238,24 @@ func (n *Node) Vote() (err error) {
 			break
 		}
 	}
+	if n.Score > len(insts)/2 {
+		n.SetRole(Leader)
+	}
 	return
+}
+
+func Loop(node *Node) {
+	node.Timer = time.NewTimer(node.TimeOut)
+	for {
+		<-node.Timer.C
+		node.Timer.Reset(node.TimeOut)
+		node.SetRole(Candidate)
+		node.Score = 1
+		err := node.Vote()
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
 }
 
 func main() {
@@ -170,12 +265,12 @@ func main() {
 	}
 	rand.Seed(time.Now().Unix())
 	node := Node{
-		Role:    Follower,
-		TimeOut: time.Second * time.Duration((rand.Int() % 10)),
+		TimeOut: time.Second * time.Duration((rand.Int()%10)+5),
 		Term:    0,
 		Ip:      os.Args[1],
 		Port:    os.Args[2],
 	}
+	node.SetRole(Follower)
 	console := Console{
 		Ip:   os.Args[3],
 		Port: os.Args[4],
@@ -188,7 +283,10 @@ func main() {
 	node.Cluster = Cluster{
 		Console: console,
 	}
+	go Loop(&node)
 	r := gin.Default()
-	r.POST("/vote", VoteHandler(node))
+	r.POST("/vote", VoteHandler(&node))
+	r.POST("/heartbeat", HeartBeatHandler(&node))
+	r.GET("/node", NodeHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))
 }
