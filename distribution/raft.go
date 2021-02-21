@@ -53,14 +53,15 @@ type Response struct {
 }
 
 type Node struct {
-	role    RaftRole      `json:"role,omitempty"`
-	TimeOut time.Duration `json:"time_out,omitempty"`
-	Term    int           `json:"term,omitempty"`
-	Ip      string        `json:"ip,omitempty"`
-	Port    string        `json:"port,omitempty"`
-	Score   int           `json:"score,omitempty"`
-	Cluster Cluster       `json:"-,omitempty"`
-	Timer   *time.Timer   `json:"-,omitempty"`
+	role             RaftRole      `json:"role,omitempty"`
+	TimeOut          time.Duration `json:"time_out,omitempty"`
+	HeartBeatTimeOut time.Duration `json:"heart_beat_time_out,omitempty"`
+	Term             int           `json:"term,omitempty"`
+	Ip               string        `json:"ip,omitempty"`
+	Port             string        `json:"port,omitempty"`
+	Score            int           `json:"score,omitempty"`
+	Cluster          Cluster       `json:"cluster,omitempty"`
+	Timer            *time.Timer   `json:"timer,omitempty"`
 }
 
 const (
@@ -155,8 +156,37 @@ func (c Console) Register(node Node) (err error) {
 	return
 }
 
-func (n *Node) Loop() {
+func (n *Node) HeartBeatLoop() {
+	t := time.NewTicker(time.Second)
+	for {
+		<-t.C
+		err := n.HeartBeat()
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
 
+}
+
+func (n *Node) HeartBeat() (err error) {
+	insts, err := n.Cluster.Console.Nodes()
+	if err != nil {
+		return
+	}
+	if len(insts) < 3 {
+		err = fmt.Errorf("at least 3 nodes but only %d", len(insts))
+		return
+	}
+	for _, i := range insts {
+		if i.Ip == n.Ip && i.Port == n.Port {
+			continue
+		}
+		go func(inst Instance) {
+			_, _ = resty.New().R().
+				Get(fmt.Sprintf("http://%s:%s/heartbeat", inst.Ip, inst.Port))
+		}(i)
+	}
+	return
 }
 
 func vote(req VoteReq, inst Instance, respC chan VoteResult) {
@@ -230,12 +260,16 @@ func Loop(node *Node) {
 	node.Timer = time.NewTimer(node.TimeOut)
 	for {
 		<-node.Timer.C
-		node.Timer.Reset(node.TimeOut)
 		node.SetRole(Candidate)
 		node.Score = 1
 		err := node.Vote()
 		if err != nil {
 			fmt.Println(err)
+			node.Timer.Reset(node.TimeOut)
+			continue
+		}
+		if node.Role() == Leader {
+			node.HeartBeatLoop()
 		}
 	}
 }
@@ -247,10 +281,11 @@ func main() {
 	}
 	rand.Seed(time.Now().Unix())
 	node := Node{
-		TimeOut: time.Second * time.Duration((rand.Int()%10)+5),
-		Term:    0,
-		Ip:      os.Args[1],
-		Port:    os.Args[2],
+		TimeOut:          time.Second * time.Duration((rand.Int()%10)+5),
+		Term:             0,
+		Ip:               os.Args[1],
+		Port:             os.Args[2],
+		HeartBeatTimeOut: time.Second * 10,
 	}
 	node.SetRole(Follower)
 	console := Console{
@@ -268,7 +303,7 @@ func main() {
 	go Loop(&node)
 	r := gin.Default()
 	r.POST("/vote", VoteHandler(&node))
-	r.POST("/heartbeat", HeartBeatHandler(&node))
+	r.GET("/heartbeat", HeartBeatHandler(&node))
 	r.GET("/node", NodeHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))
 }
