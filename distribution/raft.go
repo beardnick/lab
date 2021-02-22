@@ -113,6 +113,7 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			return
 		}
 		node.Timer.Reset(node.TimeOut)
+		node.Term = node.Term + 1
 		c.JSON(http.StatusOK, Response{
 			Data: VoteResult{Accept},
 		})
@@ -123,7 +124,7 @@ func (c Console) Nodes() (insts []Instance, err error) {
 	resp := Response{
 		Data: &insts,
 	}
-	_, err = resty.New().R().
+	_, err = resty.New().SetTimeout(time.Second).R().
 		SetResult(&resp).
 		Get(fmt.Sprintf("http://%s:%s/nodes", c.Ip, c.Port))
 	if err != nil {
@@ -142,7 +143,7 @@ func (c Console) Register(node Node) (err error) {
 		Ip:   node.Ip,
 		Port: node.Port,
 	}
-	resp, err := resty.New().R().
+	resp, err := resty.New().SetTimeout(time.Second).R().
 		SetBody(n).
 		SetResult(&r).
 		Post(fmt.Sprintf("http://%s:%s/register", c.Ip, c.Port))
@@ -182,7 +183,7 @@ func (n *Node) HeartBeat() (err error) {
 			continue
 		}
 		go func(inst Instance) {
-			_, _ = resty.New().R().
+			_, _ = resty.New().SetTimeout(time.Second).R().
 				Get(fmt.Sprintf("http://%s:%s/heartbeat", inst.Ip, inst.Port))
 		}(i)
 	}
@@ -197,14 +198,14 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 	resp := Response{
 		Data: &result,
 	}
-	_, err = resty.New().R().
+	_, err = resty.New().SetTimeout(time.Second).
+		R().
 		SetBody(req).
 		SetResult(&resp).
 		Post(fmt.Sprintf("http://%s:%s/vote", inst.Ip, inst.Port))
 	if err != nil || resp.Code != 0 {
 		fmt.Println("vote err:", err, "resp:", resp)
 		result.Result = Reject
-		return
 	}
 	respC <- result
 }
@@ -245,14 +246,15 @@ FOR:
 				n.Score = n.Score + 1
 			}
 			cnt = cnt + 1
-			if n.Score > len(insts)/2 {
-				n.SetRole(Leader)
-				break FOR
-			}
+			fmt.Println("cnt:", cnt)
 			if cnt == len(insts)-1 {
 				break FOR
 			}
 		}
+	}
+	fmt.Println("out for")
+	if n.Score > len(insts)/2 {
+		n.SetRole(Leader)
 	}
 	//if n.Score > len(insts)/2 {
 	//    n.SetRole(Leader)
