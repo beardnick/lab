@@ -53,15 +53,15 @@ type Response struct {
 }
 
 type Node struct {
-	role             RaftRole      `json:"role,omitempty"`
+	Role             RaftRole      `json:"role,omitempty"`
 	TimeOut          time.Duration `json:"time_out,omitempty"`
 	HeartBeatTimeOut time.Duration `json:"heart_beat_time_out,omitempty"`
 	Term             int           `json:"term,omitempty"`
 	Ip               string        `json:"ip,omitempty"`
 	Port             string        `json:"port,omitempty"`
 	Score            int           `json:"score,omitempty"`
-	Cluster          Cluster       `json:"cluster,omitempty"`
-	Timer            *time.Timer   `json:"timer,omitempty"`
+	Cluster          Cluster       `json:"-"`
+	Timer            *time.Timer   `json:"-"`
 }
 
 const (
@@ -106,7 +106,7 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		if node.Role() == Leader || node.Role() == Candidate || node.Term > v.Term {
+		if node.Role == Leader || node.Role == Candidate || node.Term > v.Term {
 			c.JSON(http.StatusOK, Response{
 				Data: VoteResult{Reject},
 			})
@@ -202,6 +202,7 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 		SetResult(&resp).
 		Post(fmt.Sprintf("http://%s:%s/vote", inst.Ip, inst.Port))
 	if err != nil || resp.Code != 0 {
+		fmt.Println("vote err:", err, "resp:", resp)
 		result.Result = Reject
 		return
 	}
@@ -210,11 +211,7 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 
 func (n *Node) SetRole(role RaftRole) {
 	fmt.Println(role)
-	n.role = role
-}
-
-func (n *Node) Role() RaftRole {
-	return n.role
+	n.Role = role
 }
 
 func (n *Node) Vote() (err error) {
@@ -240,19 +237,26 @@ func (n *Node) Vote() (err error) {
 	}
 	n.Term = n.Term + 1
 	cnt := 0
-	select {
-	case result := <-respC:
-		if result.Result == Accept {
-			n.Score = n.Score + 1
-		}
-		cnt = cnt + 1
-		if cnt == len(insts)-1 {
-			break
+FOR:
+	for {
+		select {
+		case result := <-respC:
+			if result.Result == Accept {
+				n.Score = n.Score + 1
+			}
+			cnt = cnt + 1
+			if n.Score > len(insts)/2 {
+				n.SetRole(Leader)
+				break FOR
+			}
+			if cnt == len(insts)-1 {
+				break FOR
+			}
 		}
 	}
-	if n.Score > len(insts)/2 {
-		n.SetRole(Leader)
-	}
+	//if n.Score > len(insts)/2 {
+	//    n.SetRole(Leader)
+	//}
 	return
 }
 
@@ -268,7 +272,7 @@ func Loop(node *Node) {
 			node.Timer.Reset(node.TimeOut)
 			continue
 		}
-		if node.Role() == Leader {
+		if node.Role == Leader {
 			node.HeartBeatLoop()
 		}
 	}
