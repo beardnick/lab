@@ -1,9 +1,10 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"os"
 	"time"
@@ -62,6 +63,7 @@ type Node struct {
 	Score            int           `json:"score,omitempty"`
 	Cluster          Cluster       `json:"-"`
 	Timer            *time.Timer   `json:"-"`
+	voted            bool          `json:"-"`
 }
 
 const (
@@ -89,6 +91,17 @@ func NodeHandler(node *Node) gin.HandlerFunc {
 
 func HeartBeatHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		v := VoteReq{}
+		err := c.ShouldBindJSON(&v)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+			return
+		}
+		node.Term = v.Term
+		node.voted = false
 		node.Timer.Reset(node.TimeOut)
 		c.JSON(http.StatusOK, Response{})
 		return
@@ -106,14 +119,14 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		if node.Role == Leader || node.Role == Candidate || node.Term > v.Term {
+		if node.voted || node.Role == Candidate || node.Term > v.Term {
 			c.JSON(http.StatusOK, Response{
 				Data: VoteResult{Reject},
 			})
 			return
 		}
 		node.Timer.Reset(node.TimeOut)
-		node.Term = node.Term + 1
+		node.voted = true
 		c.JSON(http.StatusOK, Response{
 			Data: VoteResult{Accept},
 		})
@@ -183,8 +196,13 @@ func (n *Node) HeartBeat() (err error) {
 			continue
 		}
 		go func(inst Instance) {
-			_, _ = resty.New().SetTimeout(time.Second).R().
-				Get(fmt.Sprintf("http://%s:%s/heartbeat", inst.Ip, inst.Port))
+			req := VoteReq{
+				Ip:   n.Ip,
+				Port: n.Port,
+				Term: n.Term,
+			}
+			_, _ = resty.New().SetTimeout(time.Second).R().SetBody(req).
+				Post(fmt.Sprintf("http://%s:%s/heartbeat", inst.Ip, inst.Port))
 		}(i)
 	}
 	return
@@ -236,7 +254,6 @@ func (n *Node) Vote() (err error) {
 		}
 		go vote(req, i, respC)
 	}
-	n.Term = n.Term + 1
 	cnt := 0
 FOR:
 	for {
@@ -246,7 +263,7 @@ FOR:
 				n.Score = n.Score + 1
 			}
 			cnt = cnt + 1
-			fmt.Println("cnt:", cnt)
+			fmt.Println("cnt:", cnt, "score:", n.Score)
 			if cnt == len(insts)-1 {
 				break FOR
 			}
@@ -255,6 +272,7 @@ FOR:
 	fmt.Println("out for")
 	if n.Score > len(insts)/2 {
 		n.SetRole(Leader)
+		n.voted = false
 	}
 	//if n.Score > len(insts)/2 {
 	//    n.SetRole(Leader)
@@ -266,12 +284,20 @@ func Loop(node *Node) {
 	node.Timer = time.NewTimer(node.TimeOut)
 	for {
 		<-node.Timer.C
+		node.Timer.Reset(node.TimeOut)
+		//if voted {
+		//    timeout, err := RandTimeout()
+		//    if err != nil {
+		//    }
+		//    continue
+		//}
 		node.SetRole(Candidate)
 		node.Score = 1
+		node.voted = true
+		node.Term = node.Term + 1
 		err := node.Vote()
 		if err != nil {
 			fmt.Println(err)
-			node.Timer.Reset(node.TimeOut)
 			continue
 		}
 		if node.Role == Leader {
@@ -280,14 +306,27 @@ func Loop(node *Node) {
 	}
 }
 
+func RandTimeout() (timeout time.Duration, err error) {
+	rnd, err := rand.Int(rand.Reader, big.NewInt(5000000000))
+	if err != nil {
+		return
+	}
+	timeout = time.Second*5 + time.Duration(rnd.Int64())
+	return
+}
+
 func main() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: node ip port console_ip console_port")
 		return
 	}
-	rand.Seed(time.Now().Unix())
+	timeout, err := RandTimeout()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	node := Node{
-		TimeOut:          time.Second * time.Duration((rand.Int()%10)+5),
+		TimeOut:          timeout,
 		Term:             0,
 		Ip:               os.Args[1],
 		Port:             os.Args[2],
@@ -298,7 +337,7 @@ func main() {
 		Ip:   os.Args[3],
 		Port: os.Args[4],
 	}
-	err := console.Register(node)
+	err = console.Register(node)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -309,7 +348,7 @@ func main() {
 	go Loop(&node)
 	r := gin.Default()
 	r.POST("/vote", VoteHandler(&node))
-	r.GET("/heartbeat", HeartBeatHandler(&node))
+	r.POST("/heartbeat", HeartBeatHandler(&node))
 	r.GET("/node", NodeHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))
 }
