@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -56,6 +57,7 @@ type Response struct {
 }
 
 type Node struct {
+	sync.Mutex
 	Role             RaftRole      `json:"role,omitempty"`
 	TimeOut          time.Duration `json:"time_out,omitempty"`
 	HeartBeatTimeOut time.Duration `json:"heart_beat_time_out,omitempty"`
@@ -119,15 +121,25 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		if node.Role == Candidate || node.Term >= v.Term {
+		// todo:这个node修改的操作是互斥的,这里会不会有并发问题
+		if v.Term > node.Term {
+			node.Role = Follower
+			node.Term = v.Term
+			node.Timer.Reset(node.TimeOut)
 			c.JSON(http.StatusOK, Response{
-				Data: VoteResult{Reject},
+				Data: VoteResult{Accept},
 			})
 			return
 		}
+		//if node.Role == Candidate {
+		//    c.JSON(http.StatusOK, Response{
+		//        Data: VoteResult{Reject},
+		//    })
+		//    return
+		//}
 		node.Timer.Reset(node.TimeOut)
 		c.JSON(http.StatusOK, Response{
-			Data: VoteResult{Accept},
+			Data: VoteResult{Reject},
 		})
 	}
 }
@@ -155,7 +167,10 @@ func (c Console) Register(node Node) (err error) {
 		Ip:   node.Ip,
 		Port: node.Port,
 	}
-	resp, err := resty.New().SetTimeout(time.Second).R().
+	resp, err := resty.New().
+		SetTimeout(time.Second).
+		SetRetryCount(20).
+		R().
 		SetBody(n).
 		SetResult(&r).
 		Post(fmt.Sprintf("http://%s:%s/register", c.Ip, c.Port))
@@ -215,7 +230,9 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 	resp := Response{
 		Data: &result,
 	}
-	_, err = resty.New().SetTimeout(time.Second).
+	_, err = resty.New().
+		SetTimeout(time.Second).
+		SetRetryCount(3).
 		R().
 		SetBody(req).
 		SetResult(&resp).
@@ -261,6 +278,8 @@ FOR:
 			if result.Result == Accept {
 				n.Score = n.Score + 1
 			}
+			// todo:怎样判断所有请求是否已经到达
+			// todo:判断超过半数票之后直接退出是否可行
 			cnt = cnt + 1
 			fmt.Println("cnt:", cnt, "score:", n.Score)
 			if cnt == len(insts)-1 {
