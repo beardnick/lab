@@ -13,7 +13,6 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-
 // term一半小于candicate，一半大于candidate,选举结果如何?
 
 type RaftRole int
@@ -120,7 +119,7 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		if  node.Role == Candidate || node.Term >= v.Term {
+		if node.Role == Candidate || node.Term >= v.Term {
 			c.JSON(http.StatusOK, Response{
 				Data: VoteResult{Reject},
 			})
@@ -283,7 +282,7 @@ func Loop(node *Node) {
 	node.Timer = time.NewTimer(node.TimeOut)
 	for {
 		<-node.Timer.C
-		node.Timer.Reset(node.TimeOut
+		node.Timer.Reset(node.TimeOut)
 		// todo: 处理同时被选中的情况
 		//if voted {
 		//    timeout, err := RandTimeout()
