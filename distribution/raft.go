@@ -13,6 +13,9 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+
+// term一半小于candicate，一半大于candidate,选举结果如何?
+
 type RaftRole int
 
 const (
@@ -63,7 +66,6 @@ type Node struct {
 	Score            int           `json:"score,omitempty"`
 	Cluster          Cluster       `json:"-"`
 	Timer            *time.Timer   `json:"-"`
-	voted            bool          `json:"-"`
 }
 
 const (
@@ -101,7 +103,6 @@ func HeartBeatHandler(node *Node) gin.HandlerFunc {
 			return
 		}
 		node.Term = v.Term
-		node.voted = false
 		node.Timer.Reset(node.TimeOut)
 		c.JSON(http.StatusOK, Response{})
 		return
@@ -119,14 +120,13 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		if node.voted || node.Role == Candidate || node.Term > v.Term {
+		if  node.Role == Candidate || node.Term >= v.Term {
 			c.JSON(http.StatusOK, Response{
 				Data: VoteResult{Reject},
 			})
 			return
 		}
 		node.Timer.Reset(node.TimeOut)
-		node.voted = true
 		c.JSON(http.StatusOK, Response{
 			Data: VoteResult{Accept},
 		})
@@ -272,7 +272,6 @@ FOR:
 	fmt.Println("out for")
 	if n.Score > len(insts)/2 {
 		n.SetRole(Leader)
-		n.voted = false
 	}
 	//if n.Score > len(insts)/2 {
 	//    n.SetRole(Leader)
@@ -284,7 +283,8 @@ func Loop(node *Node) {
 	node.Timer = time.NewTimer(node.TimeOut)
 	for {
 		<-node.Timer.C
-		node.Timer.Reset(node.TimeOut)
+		node.Timer.Reset(node.TimeOut
+		// todo: 处理同时被选中的情况
 		//if voted {
 		//    timeout, err := RandTimeout()
 		//    if err != nil {
@@ -293,7 +293,6 @@ func Loop(node *Node) {
 		//}
 		node.SetRole(Candidate)
 		node.Score = 1
-		node.voted = true
 		node.Term = node.Term + 1
 		err := node.Vote()
 		if err != nil {
