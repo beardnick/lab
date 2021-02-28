@@ -121,25 +121,9 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		// todo:这个node修改的操作是互斥的,这里会不会有并发问题
-		if v.Term > node.Term {
-			node.Role = Follower
-			node.Term = v.Term
-			node.Timer.Reset(node.TimeOut)
-			c.JSON(http.StatusOK, Response{
-				Data: VoteResult{Accept},
-			})
-			return
-		}
-		//if node.Role == Candidate {
-		//    c.JSON(http.StatusOK, Response{
-		//        Data: VoteResult{Reject},
-		//    })
-		//    return
-		//}
-		node.Timer.Reset(node.TimeOut)
+		result := node.voteReq(v)
 		c.JSON(http.StatusOK, Response{
-			Data: VoteResult{Reject},
+			Data: result,
 		})
 	}
 }
@@ -249,6 +233,34 @@ func (n *Node) SetRole(role RaftRole) {
 	n.Role = role
 }
 
+func (n *Node) voteReq(req VoteReq) (result VoteResult) {
+	// todo:这个node修改的操作是互斥的,这里会不会有并发问题
+	if req.Term > n.Term {
+		n.Role = Follower
+		n.Term = req.Term
+		n.Timer.Reset(n.TimeOut)
+		result.Result = Accept
+		return
+	}
+	result.Result = Reject
+	return
+}
+
+//func (n *Node) vote(peer *Node) (result VoteResult) {
+//    req := VoteReq{
+//        Ip:   n.Ip,
+//        Port: n.Port,
+//        Term: n.Term,
+//    }
+//    return peer.voteReq(req)
+//}
+
+func (n *Node) voteResult(result VoteResult) {
+	if result.Result == Accept {
+		n.Score = n.Score + 1
+	}
+}
+
 func (n *Node) Vote() (err error) {
 	req := VoteReq{
 		Ip:   n.Ip,
@@ -275,9 +287,7 @@ FOR:
 	for {
 		select {
 		case result := <-respC:
-			if result.Result == Accept {
-				n.Score = n.Score + 1
-			}
+			n.voteResult(result)
 			// todo:怎样判断所有请求是否已经到达
 			// todo:判断超过半数票之后直接退出是否可行
 			cnt = cnt + 1
@@ -332,6 +342,7 @@ func RandTimeout() (timeout time.Duration, err error) {
 	return
 }
 
+// todo: 如何测试
 func main() {
 	if len(os.Args) < 5 {
 		fmt.Println("Usage: node ip port console_ip console_port")
