@@ -122,6 +122,7 @@ FOR:
 	}
 	if n.Score > len(nodes)/2 {
 		n.role = Leader
+		fmt.Println("Leader")
 	}
 	succeed = n.role == Leader
 	return
@@ -144,7 +145,14 @@ type VoteReq struct {
 func NodeHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.JSON(http.StatusOK, Response{
-			Data: node,
+			Data: gin.H{
+				"term":    node.Term,
+				"role":    node.role.String(),
+				"timeout": node.timeout,
+				"ip":      node.Ip,
+				"port":    node.Port,
+				"score":   node.Score,
+			},
 		})
 		return
 	}
