@@ -78,6 +78,9 @@ func (n *Node) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
 }
 
 func (n *Node) TimeOut() (timeout <-chan time.Time) {
+	if n.timer == nil {
+		n.timer = time.NewTimer(n.timeout)
+	}
 	n.timer.Reset(n.timeout)
 	return n.timer.C
 }
@@ -183,8 +186,8 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 	}
 }
 
-func (c Console) Nodes() (insts []INode, err error) {
-	//insts = []*Node{}
+func (c Console) Nodes() (nodes []INode, err error) {
+	var insts []Instance
 	resp := Response{
 		Data: &insts,
 	}
@@ -197,6 +200,9 @@ func (c Console) Nodes() (insts []INode, err error) {
 	if resp.Code != 0 {
 		err = errors.New(resp.Msg)
 		return
+	}
+	for _, inst := range insts {
+		nodes = append(nodes, &Node{Ip: inst.Ip, Port: inst.Port})
 	}
 	return
 }
