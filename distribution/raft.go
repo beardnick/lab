@@ -58,15 +58,70 @@ type Response struct {
 
 type Node struct {
 	sync.Mutex
-	Role             RaftRole      `json:"role,omitempty"`
-	TimeOut          time.Duration `json:"time_out,omitempty"`
+	role             RaftRole      `json:"role,omitempty"`
+	timeout          time.Duration `json:"time_out,omitempty"`
 	HeartBeatTimeOut time.Duration `json:"heart_beat_time_out,omitempty"`
 	Term             int           `json:"term,omitempty"`
 	Ip               string        `json:"ip,omitempty"`
 	Port             string        `json:"port,omitempty"`
 	Score            int           `json:"score,omitempty"`
 	Cluster          Cluster       `json:"-"`
-	Timer            *time.Timer   `json:"-"`
+	timer            *time.Timer   `json:"-"`
+}
+
+func (n *Node) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
+	if req.Ip == n.Ip && req.Port == n.Port {
+		return
+	}
+	_, _ = resty.New().SetTimeout(time.Second).R().SetBody(req).
+		Post(fmt.Sprintf("http://%s:%s/heartbeat", n.Ip, n.Port))
+}
+
+func (n *Node) TimeOut() (timeout <-chan time.Time) {
+	n.timer.Reset(n.timeout)
+	return n.timer.C
+}
+
+func (n *Node) CampaignLeader() (succeed bool) {
+	// todo: 处理同时被选中的情况
+	//if voted {
+	//    timeout, err := RandTimeout()
+	//    if err != nil {
+	//    }
+	//    continue
+	//}
+	n.role = Candidate
+	n.Term = n.Term + 1
+	nodes, err := n.Cluster.Console.Nodes()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	respC := make(chan VoteResult)
+	for _, peer := range nodes {
+		req := VoteReq{Ip: n.Ip, Port: n.Port, Term: n.Term}
+		go peer.HandleReq(req, respC)
+	}
+	cnt := 0
+FOR:
+	for {
+		select {
+		case result := <-respC:
+			n.HandleResult(result)
+			// todo:怎样判断所有请求是否已经到达
+			// todo:判断超过半数票之后直接退出是否可行
+			cnt = cnt + 1
+			fmt.Println("cnt:", cnt, "score:", n.Score)
+			if cnt == len(nodes) {
+				break FOR
+			}
+		}
+	}
+	if n.Score > len(nodes)/2 {
+		n.role = Leader
+	}
+	succeed = n.role == Leader
+	return
 }
 
 const (
@@ -104,7 +159,7 @@ func HeartBeatHandler(node *Node) gin.HandlerFunc {
 			return
 		}
 		node.Term = v.Term
-		node.Timer.Reset(node.TimeOut)
+		node.timer.Reset(node.timeout)
 		c.JSON(http.StatusOK, Response{})
 		return
 	}
@@ -121,14 +176,15 @@ func VoteHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		result := node.voteReq(v)
+		result := node.handleReq(v)
 		c.JSON(http.StatusOK, Response{
 			Data: result,
 		})
 	}
 }
 
-func (c Console) Nodes() (insts []Instance, err error) {
+func (c Console) Nodes() (insts []INode, err error) {
+	//insts = []*Node{}
 	resp := Response{
 		Data: &insts,
 	}
@@ -181,27 +237,18 @@ func (n *Node) HeartBeatLoop() {
 }
 
 func (n *Node) HeartBeat() (err error) {
-	insts, err := n.Cluster.Console.Nodes()
+	nodes, err := n.Cluster.Console.Nodes()
 	if err != nil {
 		return
 	}
-	if len(insts) < 3 {
-		err = fmt.Errorf("at least 3 nodes but only %d", len(insts))
+	if len(nodes) < 3 {
+		err = fmt.Errorf("at least 3 nodes but only %d", len(nodes))
 		return
 	}
-	for _, i := range insts {
-		if i.Ip == n.Ip && i.Port == n.Port {
-			continue
-		}
-		go func(inst Instance) {
-			req := VoteReq{
-				Ip:   n.Ip,
-				Port: n.Port,
-				Term: n.Term,
-			}
-			_, _ = resty.New().SetTimeout(time.Second).R().SetBody(req).
-				Post(fmt.Sprintf("http://%s:%s/heartbeat", inst.Ip, inst.Port))
-		}(i)
+	respC := make(chan VoteResult)
+	for _, i := range nodes {
+		req := VoteReq{Ip: n.Ip, Port: n.Port, Term: n.Term}
+		go i.HandleHeartBeat(req, respC)
 	}
 	return
 }
@@ -228,17 +275,39 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 	respC <- result
 }
 
-func (n *Node) SetRole(role RaftRole) {
-	fmt.Println(role)
-	n.Role = role
+func (n *Node) HandleReq(req VoteReq, respC chan VoteResult) {
+	var (
+		err error
+	)
+	result := VoteResult{}
+	resp := Response{
+		Data: &result,
+	}
+	_, err = resty.New().
+		SetTimeout(time.Second).
+		SetRetryCount(3).
+		R().
+		SetBody(req).
+		SetResult(&resp).
+		Post(fmt.Sprintf("http://%s:%s/vote", n.Ip, n.Port))
+	if err != nil || resp.Code != 0 {
+		fmt.Println("vote err:", err, "resp:", resp)
+		result.Result = Reject
+	}
+	respC <- result
 }
 
-func (n *Node) voteReq(req VoteReq) (result VoteResult) {
+func (n *Node) handleReq(req VoteReq) (result VoteResult) {
 	// todo:这个node修改的操作是互斥的,这里会不会有并发问题
+	if req.Ip == n.Ip && req.Port == n.Port {
+		result.Result = Accept
+		return
+	}
 	if req.Term > n.Term {
-		n.Role = Follower
+		n.role = Follower
 		n.Term = req.Term
-		n.Timer.Reset(n.TimeOut)
+		//n.Timer.Reset(n.TimeOut)
+		n.timer.Reset(n.timeout)
 		result.Result = Accept
 		return
 	}
@@ -255,80 +324,74 @@ func (n *Node) voteReq(req VoteReq) (result VoteResult) {
 //    return peer.voteReq(req)
 //}
 
-func (n *Node) voteResult(result VoteResult) {
+func (n *Node) HandleResult(result VoteResult) {
 	if result.Result == Accept {
 		n.Score = n.Score + 1
 	}
 }
 
-func (n *Node) Vote() (err error) {
-	req := VoteReq{
-		Ip:   n.Ip,
-		Port: n.Port,
-		Term: n.Term,
-	}
-	insts, err := n.Cluster.Console.Nodes()
-	if err != nil {
-		return
-	}
-	if len(insts) < 3 {
-		err = fmt.Errorf("at least 3 nodes but only %d", len(insts))
-		return
-	}
-	respC := make(chan VoteResult)
-	for _, i := range insts {
-		if i.Ip == n.Ip && i.Port == n.Port {
-			continue
-		}
-		go vote(req, i, respC)
-	}
-	cnt := 0
-FOR:
-	for {
-		select {
-		case result := <-respC:
-			n.voteResult(result)
-			// todo:怎样判断所有请求是否已经到达
-			// todo:判断超过半数票之后直接退出是否可行
-			cnt = cnt + 1
-			fmt.Println("cnt:", cnt, "score:", n.Score)
-			if cnt == len(insts)-1 {
-				break FOR
-			}
-		}
-	}
-	fmt.Println("out for")
-	if n.Score > len(insts)/2 {
-		n.SetRole(Leader)
-	}
-	//if n.Score > len(insts)/2 {
-	//    n.SetRole(Leader)
-	//}
-	return
-}
+//func Vote(n *Node) (err error) {
+//	req := VoteReq{
+//		Ip:   n.Ip,
+//		Port: n.Port,
+//		Term: n.Term,
+//	}
+//	insts, err := n.Cluster.Console.Nodes()
+//	if err != nil {
+//		return
+//	}
+//	if len(insts) < 3 {
+//		err = fmt.Errorf("at least 3 nodes but only %d", len(insts))
+//		return
+//	}
+//	respC := make(chan VoteResult)
+//	for _, i := range insts {
+//		if i.Ip == n.Ip && i.Port == n.Port {
+//			continue
+//		}
+//		go vote(req, i, respC)
+//	}
+//	cnt := 0
+//FOR:
+//	for {
+//		select {
+//		case result := <-respC:
+//			n.HandleResult(result)
+//			// todo:怎样判断所有请求是否已经到达
+//			// todo:判断超过半数票之后直接退出是否可行
+//			cnt = cnt + 1
+//			fmt.Println("cnt:", cnt, "score:", n.Score)
+//			if cnt == len(insts)-1 {
+//				break FOR
+//			}
+//		}
+//	}
+//	fmt.Println("out for")
+//	if n.Score > len(insts)/2 {
+//		n.SetRole(Leader)
+//	}
+//	//if n.Score > len(insts)/2 {
+//	//    n.SetRole(Leader)
+//	//}
+//	return
+//}
+//
 
-func Loop(node *Node) {
-	node.Timer = time.NewTimer(node.TimeOut)
+func Loop(node INode) {
 	for {
-		<-node.Timer.C
-		node.Timer.Reset(node.TimeOut)
-		// todo: 处理同时被选中的情况
-		//if voted {
-		//    timeout, err := RandTimeout()
-		//    if err != nil {
-		//    }
-		//    continue
-		//}
-		node.SetRole(Candidate)
-		node.Score = 1
-		node.Term = node.Term + 1
-		err := node.Vote()
-		if err != nil {
-			fmt.Println(err)
+		<-node.TimeOut()
+		succeed := node.CampaignLeader()
+		if !succeed {
 			continue
 		}
-		if node.Role == Leader {
-			node.HeartBeatLoop()
+		// heart beat loop
+		t := time.NewTicker(time.Second)
+		for {
+			<-t.C
+			err := node.HeartBeat()
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 	}
 }
@@ -354,13 +417,13 @@ func main() {
 		return
 	}
 	node := Node{
-		TimeOut:          timeout,
+		timeout:          timeout,
 		Term:             0,
 		Ip:               os.Args[1],
 		Port:             os.Args[2],
 		HeartBeatTimeOut: time.Second * 10,
 	}
-	node.SetRole(Follower)
+	node.role = Follower
 	console := Console{
 		Ip:   os.Args[3],
 		Port: os.Args[4],
@@ -379,4 +442,13 @@ func main() {
 	r.POST("/heartbeat", HeartBeatHandler(&node))
 	r.GET("/node", NodeHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))
+}
+
+type INode interface {
+	HeartBeat() (err error)
+	HandleHeartBeat(req VoteReq, respC chan VoteResult)
+	HandleReq(req VoteReq, respC chan VoteResult)
+	HandleResult(result VoteResult)
+	CampaignLeader() (succeed bool)
+	TimeOut() (timeout <-chan time.Time)
 }
