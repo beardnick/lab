@@ -320,7 +320,7 @@ func (n *Node) handleReq(req VoteReq) (result VoteResult) {
 	if req.Term > n.Term {
 		n.role = Follower
 		n.Term = req.Term
-		//n.Timer.Reset(n.TimeOut)
+		fmt.Println("n0.term:",n.Term)
 		n.timer.Reset(n.timeout)
 		result.Result = Accept
 		return

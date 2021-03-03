@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,33 @@ func TestElectionTerm(t *testing.T) {
 	assert.Equal(t, sendVote(n3, n2).Result, Accept)
 	assert.Equal(t, n2.Term, n3.Term)
 	assert.Equal(t, sendVote(n3, n4).Result, Reject)
+}
+
+
+func TestConcurrentElectionTerm(t *testing.T) {
+	n0 := &Node{Ip: "",Port:"",Term: 0, timer: time.NewTimer(0)}
+	done := sync.WaitGroup{}
+	start := 1
+	end := 1000000
+	for i := 0; i < end; i++ {
+		node := &Node{Port:strconv.Itoa(start + i),Term: start + i , timer: time.NewTimer(0)}
+		done.Add(1)
+		go concurrentSendVote(&done,node, n0)
+	}
+	done.Wait()
+	assert.Equal(t,n0.Term , start + end - 1)
+}
+
+
+func concurrentSendVote(done *sync.WaitGroup,from, to *Node) (result VoteResult) {
+	defer done.Done()
+	req := VoteReq{
+		Ip:   from.Ip,
+		Port: from.Port,
+		Term: from.Term,
+	}
+	result = to.handleReq(req)
+	return
 }
 
 func sendVote(from, to *Node) (result VoteResult) {
