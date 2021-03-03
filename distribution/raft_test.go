@@ -8,10 +8,10 @@ import (
 )
 
 func TestElectionTerm(t *testing.T) {
-	n1 := &Node{Term: 1, Timer: time.NewTimer(0)}
-	n2 := &Node{Term: 2, Timer: time.NewTimer(0)}
-	n3 := &Node{Term: 3, Timer: time.NewTimer(0)}
-	n4 := &Node{Term: 4, Timer: time.NewTimer(0)}
+	n1 := &Node{Ip:"127.0.0.1", Port:"9091",Term: 1, timer: time.NewTimer(0)}
+	n2 := &Node{Ip:"127.0.0.1", Port:"9092",Term: 2, timer: time.NewTimer(0)}
+	n3 := &Node{Ip:"127.0.0.1", Port:"9093",Term: 3, timer: time.NewTimer(0)}
+	n4 := &Node{Ip:"127.0.0.1", Port:"9094",Term: 4, timer: time.NewTimer(0)}
 
 	assert.Equal(t, sendVote(n3, n1).Result, Accept)
 	assert.Equal(t, n1.Term, n3.Term)
@@ -28,5 +28,5 @@ func sendVote(from, to *Node) (result VoteResult) {
 		Port: from.Port,
 		Term: from.Term,
 	}
-	return to.voteReq(req)
+	return to.handleReq(req)
 }
