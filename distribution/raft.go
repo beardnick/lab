@@ -14,6 +14,25 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+type Mode struct {
+	 testMode bool
+	 sync.RWMutex
+}
+
+var mode Mode =  Mode{testMode: false}
+
+func SetTestMode(test bool)  {
+	mode.Lock()
+	defer mode.Unlock()
+	mode.testMode = test
+}
+
+func TestMode() bool {
+	mode.RLock()
+	defer mode.RUnlock()
+	return mode.testMode
+}
+
 // term一半小于candicate，一半大于candidate,选举结果如何?
 
 type RaftRole int
@@ -317,10 +336,15 @@ func (n *Node) handleReq(req VoteReq) (result VoteResult) {
 		result.Result = Accept
 		return
 	}
+	n.Lock()
+	defer n.Unlock()
 	if req.Term > n.Term {
+		if TestMode() {
+			// 打印增加延时，更容易出现并发错误
+			fmt.Println("n0.term:",n.Term)
+		}
 		n.role = Follower
 		n.Term = req.Term
-		fmt.Println("n0.term:",n.Term)
 		n.timer.Reset(n.timeout)
 		result.Result = Accept
 		return

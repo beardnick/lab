@@ -9,11 +9,16 @@ import (
 	"github.com/go-playground/assert/v2"
 )
 
+func TestMain(m *testing.M) {
+	SetTestMode(true)
+	m.Run()
+}
+
 func TestElectionTerm(t *testing.T) {
-	n1 := &Node{Ip:"127.0.0.1", Port:"9091",Term: 1, timer: time.NewTimer(0)}
-	n2 := &Node{Ip:"127.0.0.1", Port:"9092",Term: 2, timer: time.NewTimer(0)}
-	n3 := &Node{Ip:"127.0.0.1", Port:"9093",Term: 3, timer: time.NewTimer(0)}
-	n4 := &Node{Ip:"127.0.0.1", Port:"9094",Term: 4, timer: time.NewTimer(0)}
+	n1 := &Node{Ip: "127.0.0.1", Port: "9091", Term: 1, timer: time.NewTimer(0)}
+	n2 := &Node{Ip: "127.0.0.1", Port: "9092", Term: 2, timer: time.NewTimer(0)}
+	n3 := &Node{Ip: "127.0.0.1", Port: "9093", Term: 3, timer: time.NewTimer(0)}
+	n4 := &Node{Ip: "127.0.0.1", Port: "9094", Term: 4, timer: time.NewTimer(0)}
 
 	assert.Equal(t, sendVote(n3, n1).Result, Accept)
 	assert.Equal(t, n1.Term, n3.Term)
@@ -24,29 +29,30 @@ func TestElectionTerm(t *testing.T) {
 	assert.Equal(t, sendVote(n3, n4).Result, Reject)
 }
 
-
 func TestConcurrentElectionTerm(t *testing.T) {
-	n0 := &Node{Ip: "",Port:"",Term: 0, timer: time.NewTimer(0)}
+	n0 := &Node{Ip: "", Port: "", Term: 0, timer: time.NewTimer(0)}
 	done := sync.WaitGroup{}
 	start := 1
-	end := 1000000
+	end := 100000
+	button := make(chan struct{})
 	for i := 0; i < end; i++ {
-		node := &Node{Port:strconv.Itoa(start + i),Term: start + i , timer: time.NewTimer(0)}
+		node := &Node{Port: strconv.Itoa(start + i), Term: start + end - 1 - i, timer: time.NewTimer(0)}
 		done.Add(1)
-		go concurrentSendVote(&done,node, n0)
+		go concurrentSendVote(&done, button, node, n0)
 	}
+	close(button)
 	done.Wait()
-	assert.Equal(t,n0.Term , start + end - 1)
+	assert.Equal(t, n0.Term, start+end-1)
 }
 
-
-func concurrentSendVote(done *sync.WaitGroup,from, to *Node) (result VoteResult) {
+func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {
 	defer done.Done()
 	req := VoteReq{
 		Ip:   from.Ip,
 		Port: from.Port,
 		Term: from.Term,
 	}
+	<-button
 	result = to.handleReq(req)
 	return
 }
