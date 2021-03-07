@@ -45,6 +45,13 @@ func TestConcurrentElectionTerm(t *testing.T) {
 	assert.Equal(t, n0.term, start+end-1)
 }
 
+//func TestElection(t *testing.T) {
+//	n1 := &Node{ip: "127.0.0.1", port: "9091", term: 0, timer: time.NewTimer(1)}
+//	n2 := &Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(2)}
+//	n3 := &Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(3)}
+//	n4 := &Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(4)}
+//}
+
 func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {
 	defer done.Done()
 	req := VoteReq{

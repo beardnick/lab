@@ -64,6 +64,10 @@ type Cluster struct {
 	Console Console
 }
 
+func (c Cluster) Nodes()  (nodes []INode, err error) {
+	return c.Console.Nodes()
+}
+
 type Instance struct {
 	Ip   string `json:"ip,omitempty"`
 	Port string `json:"port,omitempty"`
@@ -84,7 +88,7 @@ type Node struct {
 	ip               string        `json:"ip,omitempty"`
 	port             string        `json:"port,omitempty"`
 	score            int           `json:"score,omitempty"`
-	cluster          Cluster       `json:"-"`
+	cluster          ICluster       `json:"-"`
 	timer            *time.Timer   `json:"-"`
 }
 
@@ -114,7 +118,7 @@ func (n *Node) CampaignLeader() (succeed bool) {
 	//}
 	n.role = Candidate
 	n.term = n.term + 1
-	nodes, err := n.cluster.Console.Nodes()
+	nodes, err := n.cluster.Nodes()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -270,7 +274,7 @@ func (n *Node) HeartBeatLoop() {
 }
 
 func (n *Node) HeartBeat() (err error) {
-	nodes, err := n.cluster.Console.Nodes()
+	nodes, err := n.cluster.Nodes()
 	if err != nil {
 		return
 	}
@@ -353,67 +357,11 @@ func (n *Node) handleReq(req VoteReq) (result VoteResult) {
 	return
 }
 
-//func (n *Node) vote(peer *Node) (result VoteResult) {
-//    req := VoteReq{
-//        Ip:   n.Ip,
-//        port: n.port,
-//        term: n.term,
-//    }
-//    return peer.voteReq(req)
-//}
-
 func (n *Node) HandleResult(result VoteResult) {
 	if result.Result == Accept {
 		n.score = n.score + 1
 	}
 }
-
-//func Vote(n *Node) (err error) {
-//	req := VoteReq{
-//		Ip:   n.Ip,
-//		port: n.port,
-//		term: n.term,
-//	}
-//	insts, err := n.cluster.Console.Nodes()
-//	if err != nil {
-//		return
-//	}
-//	if len(insts) < 3 {
-//		err = fmt.Errorf("at least 3 nodes but only %d", len(insts))
-//		return
-//	}
-//	respC := make(chan VoteResult)
-//	for _, i := range insts {
-//		if i.Ip == n.Ip && i.port == n.port {
-//			continue
-//		}
-//		go vote(req, i, respC)
-//	}
-//	cnt := 0
-//FOR:
-//	for {
-//		select {
-//		case result := <-respC:
-//			n.HandleResult(result)
-//			// todo:怎样判断所有请求是否已经到达
-//			// todo:判断超过半数票之后直接退出是否可行
-//			cnt = cnt + 1
-//			fmt.Println("cnt:", cnt, "score:", n.score)
-//			if cnt == len(insts)-1 {
-//				break FOR
-//			}
-//		}
-//	}
-//	fmt.Println("out for")
-//	if n.score > len(insts)/2 {
-//		n.SetRole(Leader)
-//	}
-//	//if n.score > len(insts)/2 {
-//	//    n.SetRole(Leader)
-//	//}
-//	return
-//}
-//
 
 func Loop(node INode) {
 	for {
@@ -489,4 +437,8 @@ type INode interface {
 	HandleResult(result VoteResult)
 	CampaignLeader() (succeed bool)
 	TimeOut() (timeout <-chan time.Time)
+}
+
+type ICluster interface {
+	Nodes()(nodes []INode, err error)
 }
