@@ -88,19 +88,41 @@ func (m MockCluster) Nodes() (nodes []INode, err error) {
 	return m.nodes()
 }
 
+type OfflineNode struct {
+	MockNode
+}
+
+func (m OfflineNode) HandleReq(req VoteReq, respC chan VoteResult) {
+	time.Sleep(time.Second)
+	respC <- VoteResult{Result: Reject}
+}
+
 func TestCampaignLeader(t *testing.T) {
 	n1 := MockNode{&Node{ip: "127.0.0.1", port: "9091", term: 0, timer: time.NewTimer(0)}}
 	n2 := MockNode{&Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(0)}}
 	n3 := MockNode{&Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(0)}}
 	n4 := MockNode{&Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(0)}}
 	cluster := MockCluster{}
+
+	// 节点过少
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2}, nil }
+	n1.cluster = cluster
+	assert.False(t, n1.CampaignLeader())
+
+	// n1拉票
 	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2, n3, n4}, nil }
 	n1.cluster = cluster
-	n2.cluster = cluster
-	n3.cluster = cluster
-	n4.cluster = cluster
-
 	assert.True(t, n1.CampaignLeader())
+
+	// n1离线
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{OfflineNode{n1}, n2, n3, n4}, nil }
+	n2.cluster = cluster
+	assert.True(t, n2.CampaignLeader())
+
+	//n2离线,票数始终无法超过半数
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{OfflineNode{n1}, OfflineNode{n2}, n3, n4}, nil }
+	n3.cluster = cluster
+	assert.False(t, n3.CampaignLeader())
 }
 
 func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {

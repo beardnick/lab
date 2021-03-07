@@ -131,6 +131,10 @@ func (n *Node) CampaignLeader() (succeed bool) {
 		fmt.Println(err)
 		return
 	}
+	if len(nodes) < 3 {
+		fmt.Printf("至少要有3个节点，现在只有%d个\n", len(nodes))
+		return
+	}
 	respC := make(chan VoteResult)
 	for _, peer := range nodes {
 		req := VoteReq{Ip: n.ip, Port: n.port, Term: n.term}
