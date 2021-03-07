@@ -55,72 +55,52 @@ type MockCluster struct {
 	nodes func() (nodes []INode, err error)
 }
 
+// 去掉网络通信的node
 type MockNode struct {
-	heartBeat       func() (err error)
-	handleHeartBeat func(req VoteReq, respC chan VoteResult)
-	handleReq       func(req VoteReq, respC chan VoteResult)
-	handleResult    func(result VoteResult)
-	campaignLeader  func() (succeed bool)
-	timeOut         func() (timeout <-chan time.Time)
+	*Node
 }
 
 func (m MockNode) HeartBeat() (err error) {
-	return m.heartBeat()
+	return m.Node.HeartBeat()
 }
 
 func (m MockNode) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
-	m.handleHeartBeat(req, respC)
+	m.Node.handleHeartBeat(req)
 }
 
 func (m MockNode) HandleReq(req VoteReq, respC chan VoteResult) {
-	m.handleReq(req, respC)
+	respC <- m.Node.handleReq(req)
 }
 
 func (m MockNode) HandleResult(result VoteResult) {
-	m.handleResult(result)
+	m.Node.HandleResult(result)
 }
 
 func (m MockNode) CampaignLeader() (succeed bool) {
-	return m.campaignLeader()
+	return m.Node.CampaignLeader()
 }
 
 func (m MockNode) TimeOut() (timeout <-chan time.Time) {
-	return m.timeOut()
+	return m.Node.TimeOut()
 }
 
 func (m MockCluster) Nodes() (nodes []INode, err error) {
 	return m.nodes()
 }
 
-// 去掉了网络通信后的node
-func genMockNode(n *Node) MockNode {
-	node := MockNode{}
-	node.heartBeat = func() (err error) { return n.HeartBeat() }
-	node.handleHeartBeat = func(req VoteReq, respC chan VoteResult) { n.handleHeartBeat(req) }
-	node.handleReq = func(req VoteReq, respC chan VoteResult) { respC <- n.handleReq(req) }
-	node.handleResult = func(result VoteResult) { n.HandleResult(result) }
-	node.campaignLeader = func() (succeed bool) { return n.CampaignLeader() }
-	node.timeOut = func() (timeout <-chan time.Time) { return n.TimeOut() }
-	return node
-}
-
 func TestCampaignLeader(t *testing.T) {
-	n1 := &Node{ip: "127.0.0.1", port: "9091", term: 0, timer: time.NewTimer(0)}
-	n2 := &Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(0)}
-	n3 := &Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(0)}
-	n4 := &Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(0)}
-	mn1 := genMockNode(n1)
-	mn2 := genMockNode(n2)
-	mn3 := genMockNode(n3)
-	mn4 := genMockNode(n4)
+	n1 := MockNode{&Node{ip: "127.0.0.1", port: "9091", term: 0, timer: time.NewTimer(0)}}
+	n2 := MockNode{&Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(0)}}
+	n3 := MockNode{&Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(0)}}
+	n4 := MockNode{&Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(0)}}
 	cluster := MockCluster{}
-	cluster.nodes = func() (nodes []INode, err error) { return []INode{mn1, mn2, mn3, mn4}, nil }
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2, n3, n4}, nil }
 	n1.cluster = cluster
 	n2.cluster = cluster
 	n3.cluster = cluster
 	n4.cluster = cluster
 
-	assert.True(t, mn1.CampaignLeader())
+	assert.True(t, n1.CampaignLeader())
 }
 
 func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {
