@@ -64,7 +64,7 @@ type Cluster struct {
 	Console Console
 }
 
-func (c Cluster) Nodes()  (nodes []INode, err error) {
+func (c Cluster) Nodes() (nodes []INode, err error) {
 	return c.Console.Nodes()
 }
 
@@ -88,8 +88,16 @@ type Node struct {
 	ip               string        `json:"ip,omitempty"`
 	port             string        `json:"port,omitempty"`
 	score            int           `json:"score,omitempty"`
-	cluster          ICluster       `json:"-"`
+	cluster          ICluster      `json:"-"`
 	timer            *time.Timer   `json:"-"`
+}
+
+func (n *Node) handleHeartBeat(req VoteReq) {
+	if req.Term < n.term {
+		return
+	}
+	n.term = req.Term
+	n.timer.Reset(n.timeout)
 }
 
 func (n *Node) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
@@ -192,8 +200,7 @@ func HeartBeatHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		node.term = v.Term
-		node.timer.Reset(node.timeout)
+		node.handleHeartBeat(v)
 		c.JSON(http.StatusOK, Response{})
 		return
 	}
@@ -335,7 +342,6 @@ func (n *Node) HandleReq(req VoteReq, respC chan VoteResult) {
 }
 
 func (n *Node) handleReq(req VoteReq) (result VoteResult) {
-	// todo:这个node修改的操作是互斥的,这里会不会有并发问题
 	if req.Ip == n.ip && req.Port == n.port {
 		result.Result = Accept
 		return
@@ -440,5 +446,5 @@ type INode interface {
 }
 
 type ICluster interface {
-	Nodes()(nodes []INode, err error)
+	Nodes() (nodes []INode, err error)
 }
