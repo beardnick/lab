@@ -13,22 +13,8 @@ func TestMain(m *testing.M) {
 	m.Run()
 }
 
-func TestElectionTerm(t *testing.T) {
-	n1 := &Node{ip: "127.0.0.1", port: "9091", term: 1, timer: time.NewTimer(0)}
-	n2 := &Node{ip: "127.0.0.1", port: "9092", term: 2, timer: time.NewTimer(0)}
-	n3 := &Node{ip: "127.0.0.1", port: "9093", term: 3, timer: time.NewTimer(0)}
-	n4 := &Node{ip: "127.0.0.1", port: "9094", term: 4, timer: time.NewTimer(0)}
-
-	assert.Equal(t, sendVote(n3, n1).Result, Accept)
-	assert.Equal(t, n1.term, n3.term)
-	// 一个term只能进行一次投票
-	assert.Equal(t, sendVote(n3, n1).Result, Reject)
-	assert.Equal(t, sendVote(n3, n2).Result, Accept)
-	assert.Equal(t, n2.term, n3.term)
-	assert.Equal(t, sendVote(n3, n4).Result, Reject)
-}
-
-func TestConcurrentElectionTerm(t *testing.T) {
+func TestHandleReq(t *testing.T) {
+	// 并行拉票,是否会有并发问题
 	n0 := &Node{ip: "", port: "", term: 0, timer: time.NewTimer(0)}
 	done := sync.WaitGroup{}
 	start := 1
@@ -42,59 +28,23 @@ func TestConcurrentElectionTerm(t *testing.T) {
 	close(button)
 	done.Wait()
 	assert.Equal(t, n0.term, start+end-1)
+
+	n1 := &Node{ip: "127.0.0.1", port: "9091", term: 1, timer: time.NewTimer(0)}
+	n2 := &Node{ip: "127.0.0.1", port: "9092", term: 2, timer: time.NewTimer(0)}
+	n3 := &Node{ip: "127.0.0.1", port: "9093", term: 3, timer: time.NewTimer(0)}
+	n4 := &Node{ip: "127.0.0.1", port: "9094", term: 4, timer: time.NewTimer(0)}
+	assert.Equal(t, sendVote(n3, n1).Result, Accept)
+	assert.Equal(t, n1.term, n3.term)
+	// 一个term只能进行一次投票
+	assert.Equal(t, sendVote(n3, n1).Result, Reject)
+	assert.Equal(t, sendVote(n3, n2).Result, Accept)
+	assert.Equal(t, n2.term, n3.term)
+	// n3.term太小
+	assert.Equal(t, sendVote(n3, n4).Result, Reject)
 }
 
-//func TestElection(t *testing.T) {
-//	n1 := &Node{ip: "127.0.0.1", port: "9091", term: 0, timer: time.NewTimer(1)}
-//	n2 := &Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(2)}
-//	n3 := &Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(3)}
-//	n4 := &Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(4)}
-//}
+func TestHandleHeartBeat(t *testing.T) {
 
-type MockCluster struct {
-	nodes func() (nodes []INode, err error)
-}
-
-// 去掉网络通信的node
-type MockNode struct {
-	*Node
-}
-
-func (m MockNode) HeartBeat() (err error) {
-	return m.Node.HeartBeat()
-}
-
-func (m MockNode) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
-	m.Node.handleHeartBeat(req)
-}
-
-func (m MockNode) HandleReq(req VoteReq, respC chan VoteResult) {
-	respC <- m.Node.handleReq(req)
-}
-
-func (m MockNode) HandleResult(result VoteResult) {
-	m.Node.HandleResult(result)
-}
-
-func (m MockNode) CampaignLeader() (succeed bool) {
-	return m.Node.CampaignLeader()
-}
-
-func (m MockNode) TimeOut() (timeout <-chan time.Time) {
-	return m.Node.TimeOut()
-}
-
-func (m MockCluster) Nodes() (nodes []INode, err error) {
-	return m.nodes()
-}
-
-type OfflineNode struct {
-	MockNode
-}
-
-func (m OfflineNode) HandleReq(req VoteReq, respC chan VoteResult) {
-	time.Sleep(time.Second)
-	respC <- VoteResult{Result: Reject}
 }
 
 func TestCampaignLeader(t *testing.T) {
@@ -144,4 +94,62 @@ func sendVote(from, to *Node) (result VoteResult) {
 		Term: from.term,
 	}
 	return to.handleReq(req)
+}
+
+type MockCluster struct {
+	nodes func() (nodes []INode, err error)
+}
+
+// 去掉网络通信的node
+type MockNode struct {
+	*Node
+}
+
+func (m MockNode) HeartBeat() (err error) {
+	return m.Node.HeartBeat()
+}
+
+func (m MockNode) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
+	m.Node.handleHeartBeat(req)
+}
+
+func (m MockNode) HandleReq(req VoteReq, respC chan VoteResult) {
+	respC <- m.Node.handleReq(req)
+}
+
+func (m MockNode) HandleResult(result VoteResult) {
+	m.Node.HandleResult(result)
+}
+
+func (m MockNode) CampaignLeader() (succeed bool) {
+	return m.Node.CampaignLeader()
+}
+
+func (m MockNode) TimeOut() (timeout <-chan time.Time) {
+	return m.Node.TimeOut()
+}
+
+func (m MockCluster) Nodes() (nodes []INode, err error) {
+	return m.nodes()
+}
+
+type OfflineNode struct {
+	MockNode
+}
+
+func (m OfflineNode) HandleReq(req VoteReq, respC chan VoteResult) {
+	time.Sleep(time.Second)
+	respC <- VoteResult{Result: Reject}
+}
+
+func TestRandTimeout(t *testing.T) {
+	set := map[time.Duration]bool{}
+	tests := 1000
+	for i := 0; i < tests; i++ {
+		timeout, err := RandTimeout()
+		assert.Nil(t, err)
+		set[timeout] = true
+	}
+	// n个随机数不相等
+	assert.Len(t, set, tests)
 }

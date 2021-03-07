@@ -96,6 +96,8 @@ func (n *Node) handleHeartBeat(req VoteReq) {
 	if req.Term < n.term {
 		return
 	}
+	n.Lock()
+	defer n.Unlock()
 	n.term = req.Term
 	n.timer.Reset(n.timeout)
 }
@@ -368,6 +370,8 @@ func (n *Node) handleReq(req VoteReq) (result VoteResult) {
 }
 
 func (n *Node) HandleResult(result VoteResult) {
+	n.Lock()
+	defer n.Unlock()
 	if result.Result == Accept {
 		n.score = n.score + 1
 	}
