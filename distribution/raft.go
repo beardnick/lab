@@ -90,6 +90,60 @@ type Node struct {
 	score            int           `json:"score,omitempty"`
 	cluster          ICluster      `json:"-"`
 	timer            *time.Timer   `json:"-"`
+	data             map[string]string
+}
+
+func (n *Node) Equal(other INode) bool {
+	if o, ok := other.(*Node); ok {
+		return o.ip == n.ip && o.port == n.port
+	}
+	return false
+}
+
+func (n *Node) HandleSet(key, value string, respC chan error) {
+	panic("implement me")
+}
+
+func (n *Node) Set(key, value string) (err error) {
+	nodes, err := n.cluster.Nodes()
+	if err != nil {
+		return
+	}
+	respC := make(chan error)
+	for _, node := range nodes {
+		if n.Equal(node) {
+			continue
+		}
+		go node.HandleSet(key, value, respC)
+	}
+	for {
+		select {
+		case err = <-respC:
+			if err != nil {
+
+			}
+		}
+	}
+}
+
+func (n *Node) handleSet(key, value string) (err error) {
+}
+
+func (n *Node) Get(key string) (value string, err error) {
+
+}
+
+func (n *Node) set(key, value string) (err error) {
+	if n.data == nil {
+		n.data = map[string]string{}
+	}
+	n.data[key] = value
+	return
+}
+
+func (n *Node) get(key string) (value string, err error) {
+	value = n.data[key]
+	return
 }
 
 func (n *Node) handleHeartBeat(req VoteReq) {
@@ -177,6 +231,86 @@ type VoteReq struct {
 	Ip   string `json:"ip,omitempty"`
 	Port string `json:"port,omitempty"`
 	Term int    `json:"term,omitempty"`
+}
+type SetReq struct {
+	Key   string
+	Value string
+}
+
+type SetResp struct {
+	Key   string
+	Value string
+}
+
+type GetReq struct {
+	Key string
+}
+
+type GetResp struct {
+	Key   string
+	Value string
+}
+
+func SetHandler(node *Node) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 写和读都只能是leader
+		if node.role != Leader {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  "node is not leader",
+			})
+			return
+		}
+		req := SetReq{}
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+		}
+		err = node.Set(req.Key, req.Value)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+		}
+		c.JSON(http.StatusOK, Response{
+			Data: SetResp{Key: req.Key, Value: req.Value},
+		})
+	}
+}
+
+func GetHandler(node *Node) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 写和读都只能是leader
+		if node.role != Leader {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  "node is not leader",
+			})
+			return
+		}
+		req := GetReq{}
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+		}
+		value, err := node.Get(req.Key)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+		}
+		c.JSON(http.StatusOK, Response{
+			Data: GetResp{Key: req.Key, Value: value},
+		})
+	}
 }
 
 func NodeHandler(node *Node) gin.HandlerFunc {
@@ -441,6 +575,8 @@ func main() {
 	r.POST("/vote", VoteHandler(&node))
 	r.POST("/heartbeat", HeartBeatHandler(&node))
 	r.GET("/node", NodeHandler(&node))
+	r.POST("/set", SetHandler(&node))
+	r.GET("/get", GetHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))
 }
 
@@ -448,9 +584,13 @@ type INode interface {
 	HeartBeat() (err error)
 	HandleHeartBeat(req VoteReq, respC chan VoteResult)
 	HandleReq(req VoteReq, respC chan VoteResult)
+	HandleSet(key, value string, respC chan error)
 	HandleResult(result VoteResult)
+	Set(key, value string) (err error)
+	Get(key string) (value string, err error)
 	CampaignLeader() (succeed bool)
 	TimeOut() (timeout <-chan time.Time)
+	Equal(n INode) bool
 }
 
 type ICluster interface {

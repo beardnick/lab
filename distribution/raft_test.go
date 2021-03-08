@@ -1,11 +1,12 @@
 package main
 
 import (
-	"github.com/stretchr/testify/assert"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMain(m *testing.M) {
@@ -27,20 +28,20 @@ func TestHandleReq(t *testing.T) {
 	}
 	close(button)
 	done.Wait()
-	assert.Equal(t, n0.term, start+end-1)
+	assert.Equal(t, start+end-1, n0.term)
 
 	n1 := &Node{ip: "127.0.0.1", port: "9091", term: 1, timer: time.NewTimer(0)}
 	n2 := &Node{ip: "127.0.0.1", port: "9092", term: 2, timer: time.NewTimer(0)}
 	n3 := &Node{ip: "127.0.0.1", port: "9093", term: 3, timer: time.NewTimer(0)}
 	n4 := &Node{ip: "127.0.0.1", port: "9094", term: 4, timer: time.NewTimer(0)}
-	assert.Equal(t, sendVote(n3, n1).Result, Accept)
+	assert.Equal(t, Accept, sendVote(n3, n1).Result)
 	assert.Equal(t, n1.term, n3.term)
 	// 一个term只能进行一次投票
-	assert.Equal(t, sendVote(n3, n1).Result, Reject)
-	assert.Equal(t, sendVote(n3, n2).Result, Accept)
+	assert.Equal(t, Reject, sendVote(n3, n1).Result)
+	assert.Equal(t, Accept, sendVote(n3, n2).Result)
 	assert.Equal(t, n2.term, n3.term)
 	// n3.term太小
-	assert.Equal(t, sendVote(n3, n4).Result, Reject)
+	assert.Equal(t, Reject, sendVote(n3, n4).Result)
 }
 
 func TestHandleHeartBeat(t *testing.T) {
@@ -75,6 +76,49 @@ func TestCampaignLeader(t *testing.T) {
 	assert.False(t, n3.CampaignLeader())
 }
 
+func TestClusterSetGet(t *testing.T) {
+	n1 := MockNode{&Node{ip: "127.0.0.1", port: "9091", term: 0, timer: time.NewTimer(0)}}
+	n2 := MockNode{&Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(0)}}
+	n3 := MockNode{&Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(0)}}
+	n4 := MockNode{&Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(0)}}
+	cluster := MockCluster{}
+
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2, n3, n4}, nil }
+	n1.cluster = cluster
+	assert.True(t, n1.CampaignLeader())
+
+	// leader set get
+	s, err := n1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "", s)
+	err = n1.Set("hello", "world")
+	assert.Nil(t, err)
+	s, err = n1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", s)
+	err = n1.Set("", "world")
+	assert.Nil(t, err)
+	s, err = n1.Get("")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", s)
+
+	// follower set get
+	err = n2.Set("hello", "world")
+	assert.NotNil(t, err)
+	s, err = n2.Get("hello")
+	assert.NotNil(t, err)
+
+	// n1离线
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{OfflineNode{n1}, n2, n3, n4}, nil }
+	n2.cluster = cluster
+	assert.True(t, n2.CampaignLeader())
+
+	// n2 新leader获取数据
+	s, err = n2.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", s)
+}
+
 func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {
 	defer done.Done()
 	req := VoteReq{
@@ -94,6 +138,18 @@ func sendVote(from, to *Node) (result VoteResult) {
 		Term: from.term,
 	}
 	return to.handleReq(req)
+}
+
+func TestRandTimeout(t *testing.T) {
+	set := map[time.Duration]bool{}
+	tests := 1000
+	for i := 0; i < tests; i++ {
+		timeout, err := RandTimeout()
+		assert.Nil(t, err)
+		set[timeout] = true
+	}
+	// n个随机数不相等
+	assert.Len(t, set, tests)
 }
 
 type MockCluster struct {
@@ -140,16 +196,4 @@ type OfflineNode struct {
 func (m OfflineNode) HandleReq(req VoteReq, respC chan VoteResult) {
 	time.Sleep(time.Second)
 	respC <- VoteResult{Result: Reject}
-}
-
-func TestRandTimeout(t *testing.T) {
-	set := map[time.Duration]bool{}
-	tests := 1000
-	for i := 0; i < tests; i++ {
-		timeout, err := RandTimeout()
-		assert.Nil(t, err)
-		set[timeout] = true
-	}
-	// n个随机数不相等
-	assert.Len(t, set, tests)
 }
