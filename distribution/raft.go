@@ -101,10 +101,32 @@ func (n *Node) Equal(other INode) bool {
 }
 
 func (n *Node) HandleSet(key, value string, respC chan error) {
-	panic("implement me")
+	var (
+		err error
+	)
+	req := SetReq{
+		Key:   key,
+		Value: value,
+	}
+	result := SetResp{}
+	resp := Response{
+		Data: &result,
+	}
+	_, err = resty.New().
+		SetTimeout(time.Second).
+		SetRetryCount(3).
+		R().
+		SetBody(req).
+		SetResult(&resp).
+		Post(fmt.Sprintf("http://%s:%s/internal/set", n.ip, n.port))
+	respC <- err
 }
 
 func (n *Node) Set(key, value string) (err error) {
+	if n.role != Leader {
+		err = errors.New("only leader can get")
+		return
+	}
 	nodes, err := n.cluster.Nodes()
 	if err != nil {
 		return
@@ -116,21 +138,34 @@ func (n *Node) Set(key, value string) (err error) {
 		}
 		go node.HandleSet(key, value, respC)
 	}
+	cnt := 0
+FOR:
 	for {
 		select {
 		case err = <-respC:
+			cnt = cnt + 1
 			if err != nil {
-
+				// 只要有一个失败就返回用户失败信息
+				return
+			}
+			if cnt == len(nodes) {
+				break FOR
 			}
 		}
 	}
+	err = n.set(key, value)
+	return
 }
 
-func (n *Node) handleSet(key, value string) (err error) {
-}
+//func (n *Node) handleSet(key, value string) (err error) {
+//}
 
 func (n *Node) Get(key string) (value string, err error) {
-
+	if n.role != Leader {
+		err = errors.New("only leader can get")
+		return
+	}
+	return n.get(key)
 }
 
 func (n *Node) set(key, value string) (err error) {
@@ -251,16 +286,31 @@ type GetResp struct {
 	Value string
 }
 
-func SetHandler(node *Node) gin.HandlerFunc {
+func InternalSetHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 写和读都只能是leader
-		if node.role != Leader {
+		req := SetReq{}
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
 			c.JSON(http.StatusOK, Response{
 				Code: 1,
-				Msg:  "node is not leader",
+				Msg:  err.Error(),
 			})
-			return
 		}
+		err = node.set(req.Key, req.Value)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+		}
+		c.JSON(http.StatusOK, Response{
+			Data: SetResp{Key: req.Key, Value: req.Value},
+		})
+	}
+}
+
+func SetHandler(node *Node) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		req := SetReq{}
 		err := c.ShouldBindJSON(&req)
 		if err != nil {
@@ -284,14 +334,6 @@ func SetHandler(node *Node) gin.HandlerFunc {
 
 func GetHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 写和读都只能是leader
-		if node.role != Leader {
-			c.JSON(http.StatusOK, Response{
-				Code: 1,
-				Msg:  "node is not leader",
-			})
-			return
-		}
 		req := GetReq{}
 		err := c.ShouldBindJSON(&req)
 		if err != nil {
@@ -575,6 +617,8 @@ func main() {
 	r.POST("/vote", VoteHandler(&node))
 	r.POST("/heartbeat", HeartBeatHandler(&node))
 	r.GET("/node", NodeHandler(&node))
+	// 内部调用方法
+	r.POST("/internal/set", InternalSetHandler(&node))
 	r.POST("/set", SetHandler(&node))
 	r.GET("/get", GetHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))

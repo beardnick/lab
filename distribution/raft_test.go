@@ -117,6 +117,12 @@ func TestClusterSetGet(t *testing.T) {
 	s, err = n2.Get("hello")
 	assert.Nil(t, err)
 	assert.Equal(t, "world", s)
+
+	err = n2.Set("hello", "test")
+	assert.Nil(t, err)
+	s, err = n2.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "test", s)
 }
 
 func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {
@@ -161,8 +167,8 @@ type MockNode struct {
 	*Node
 }
 
-func (m MockNode) HeartBeat() (err error) {
-	return m.Node.HeartBeat()
+func (m MockNode) HandleSet(key, value string, respC chan error) {
+	respC <- m.Node.set(key, value)
 }
 
 func (m MockNode) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
@@ -171,18 +177,6 @@ func (m MockNode) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
 
 func (m MockNode) HandleReq(req VoteReq, respC chan VoteResult) {
 	respC <- m.Node.handleReq(req)
-}
-
-func (m MockNode) HandleResult(result VoteResult) {
-	m.Node.HandleResult(result)
-}
-
-func (m MockNode) CampaignLeader() (succeed bool) {
-	return m.Node.CampaignLeader()
-}
-
-func (m MockNode) TimeOut() (timeout <-chan time.Time) {
-	return m.Node.TimeOut()
 }
 
 func (m MockCluster) Nodes() (nodes []INode, err error) {
