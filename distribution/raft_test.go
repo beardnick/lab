@@ -123,6 +123,20 @@ func TestClusterSetGet(t *testing.T) {
 	s, err = n2.Get("hello")
 	assert.Nil(t, err)
 	assert.Equal(t, "test", s)
+
+	// n1 重新上线
+	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2, n3, n4}, nil }
+	n2.cluster = cluster
+	err = n2.HeartBeat()
+	time.Sleep(time.Second)
+	assert.Nil(t, err)
+	assert.Equal(t, n2.term, n1.term)
+
+	// 重新上线的n1要有同步的数据
+	n1.CampaignLeader()
+	s, err = n1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "test", s)
 }
 
 func concurrentSendVote(done *sync.WaitGroup, button chan struct{}, from, to *Node) (result VoteResult) {
@@ -190,4 +204,7 @@ type OfflineNode struct {
 func (m OfflineNode) HandleReq(req VoteReq, respC chan VoteResult) {
 	time.Sleep(time.Second)
 	respC <- VoteResult{Result: Reject}
+}
+func (m OfflineNode) HandleSet(key, value string, respC chan error) {
+	respC <- nil
 }

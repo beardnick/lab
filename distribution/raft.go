@@ -21,6 +21,8 @@ type Mode struct {
 
 var mode Mode = Mode{testMode: false}
 
+var setLog []SetReq
+
 func SetTestMode(test bool) {
 	mode.Lock()
 	defer mode.Unlock()
@@ -119,7 +121,16 @@ func (n *Node) HandleSet(key, value string, respC chan error) {
 		SetBody(req).
 		SetResult(&resp).
 		Post(fmt.Sprintf("http://%s:%s/internal/set", n.ip, n.port))
-	respC <- err
+	// 未知客户端错误
+	if err != nil {
+		fmt.Println("handle set error:", err)
+		respC <- nil
+		return
+	}
+	// 服务端处理出错
+	if resp.Code != 0 {
+		respC <- errors.New(resp.Msg)
+	}
 }
 
 func (n *Node) Set(key, value string) (err error) {
