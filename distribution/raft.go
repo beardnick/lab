@@ -14,14 +14,28 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
+var (
+	IndexInconsistentErr = RaftErr{
+		Code:        500001,
+		Description: "Index  Inconsistent",
+	}
+)
+
+type RaftErr struct {
+	Code        int
+	Description string
+}
+
+func (r RaftErr) Error() string {
+	return r.Description
+}
+
 type Mode struct {
 	testMode bool
 	sync.RWMutex
 }
 
 var mode Mode = Mode{testMode: false}
-
-var setLog []SetReq
 
 func SetTestMode(test bool) {
 	mode.Lock()
@@ -93,15 +107,19 @@ type Node struct {
 	cluster          ICluster      `json:"-"`
 	timer            *time.Timer   `json:"-"`
 	data             map[string]string
+	setLog           []SetLog
+	unSetLog         []SetLog
 }
 
+// 从Node组合而来的都可以与Node相等
 func (n *Node) Equal(other INode) bool {
 	if o, ok := other.(*Node); ok {
 		return o.ip == n.ip && o.port == n.port
 	}
-	return false
+	return other.Equal(n)
 }
 
+// 只有ip port信息
 func (n *Node) HandleSet(key, value string, respC chan error) {
 	var (
 		err error
@@ -133,6 +151,45 @@ func (n *Node) HandleSet(key, value string, respC chan error) {
 	}
 }
 
+type logCompensationReq struct {
+	Logs  []SetLog `json:"logs"`
+	Index int      `json:"index"`
+}
+
+func calcCompensation(index int, logs []SetLog) (i int, l []SetLog) {
+	//fmt.Println("calc:", index, logs)
+	if index > len(logs) {
+		i = len(logs)
+		l = []SetLog{}
+	} else {
+		i = index
+		l = logs[index:]
+	}
+	return
+}
+
+func (n *Node) logCompensation(ip, port string, index int, logs []SetLog) (err error) {
+	req := logCompensationReq{
+		Logs:  logs,
+		Index: index,
+	}
+	resp := Response{}
+	_, err = resty.New().
+		SetTimeout(time.Second).
+		SetRetryCount(3).
+		R().
+		SetBody(req).
+		SetResult(&resp).
+		Post(fmt.Sprintf("http://%s:%s/log/compensation", n.ip, n.port))
+	if err != nil {
+		return
+	}
+	if resp.Code != 0 {
+		err = errors.New(resp.Msg)
+	}
+	return
+}
+
 func (n *Node) Set(key, value string) (err error) {
 	if n.role != Leader {
 		err = errors.New("only leader can get")
@@ -149,7 +206,7 @@ func (n *Node) Set(key, value string) (err error) {
 		}
 		go node.HandleSet(key, value, respC)
 	}
-	cnt := 0
+	cnt := 1
 FOR:
 	for {
 		select {
@@ -183,7 +240,9 @@ func (n *Node) set(key, value string) (err error) {
 	if n.data == nil {
 		n.data = map[string]string{}
 	}
+	n.unSetLog = append(n.unSetLog, SetLog{Key: key, Value: n.data[key]})
 	n.data[key] = value
+	n.setLog = append(n.setLog, SetLog{Key: key, Value: value})
 	return
 }
 
@@ -192,7 +251,7 @@ func (n *Node) get(key string) (value string, err error) {
 	return
 }
 
-func (n *Node) handleHeartBeat(req VoteReq) {
+func (n *Node) handleHeartBeat(req HeartBeatReq) (err error) {
 	if req.Term < n.term {
 		return
 	}
@@ -200,14 +259,39 @@ func (n *Node) handleHeartBeat(req VoteReq) {
 	defer n.Unlock()
 	n.term = req.Term
 	n.timer.Reset(n.timeout)
+	if len(n.setLog) != req.Index {
+		err = IndexInconsistentErr
+	}
+	return
 }
 
-func (n *Node) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
+// 只有ip port信息
+func (n *Node) HandleHeartBeat(req HeartBeatReq, respC chan error) {
 	if req.Ip == n.ip && req.Port == n.port {
 		return
 	}
-	_, _ = resty.New().SetTimeout(time.Second).R().SetBody(req).
+	result := HeartBeatResult{}
+	resp := Response{
+		Data: &result,
+	}
+	_, err := resty.New().SetTimeout(time.Second).R().SetBody(req).SetResult(&resp).
 		Post(fmt.Sprintf("http://%s:%s/heartbeat", n.ip, n.port))
+	// 未知客户端错误
+	if err != nil {
+		fmt.Println("handle set error:", err)
+		respC <- nil
+		return
+	}
+	// 数据不一致 补偿数据
+	if resp.Code == IndexInconsistentErr.Code {
+		index, l := calcCompensation(result.Index, req.logs)
+		respC <- n.logCompensation(n.ip, n.port, index, l)
+		return
+	}
+	// 服务端处理出错
+	if resp.Code != 0 {
+		respC <- errors.New(resp.Msg)
+	}
 }
 
 func (n *Node) TimeOut() (timeout <-chan time.Time) {
@@ -273,12 +357,32 @@ const (
 type VoteResult struct {
 	Result int `json:"result,omitempty"`
 }
+
+type HeartBeatResult struct {
+	Result int `json:"result,omitempty"`
+	Index  int `json:"index"`
+}
+
+type HeartBeatReq struct {
+	Ip    string   `json:"ip,omitempty"`
+	Port  string   `json:"port,omitempty"`
+	Term  int      `json:"term,omitempty"`
+	Index int      `json:"index"`
+	logs  []SetLog `json:"-"`
+}
+
 type VoteReq struct {
 	Ip   string `json:"ip,omitempty"`
 	Port string `json:"port,omitempty"`
 	Term int    `json:"term,omitempty"`
 }
 type SetReq struct {
+	Key   string
+	Value string
+	Index int
+}
+
+type SetLog struct {
 	Key   string
 	Value string
 }
@@ -384,7 +488,7 @@ func NodeHandler(node *Node) gin.HandlerFunc {
 
 func HeartBeatHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		v := VoteReq{}
+		v := HeartBeatReq{}
 		err := c.ShouldBindJSON(&v)
 		if err != nil {
 			c.JSON(http.StatusOK, Response{
@@ -393,7 +497,14 @@ func HeartBeatHandler(node *Node) gin.HandlerFunc {
 			})
 			return
 		}
-		node.handleHeartBeat(v)
+		err = node.handleHeartBeat(v)
+		if errors.Is(err, IndexInconsistentErr) {
+			c.JSON(http.StatusOK, Response{
+				Code: IndexInconsistentErr.Code,
+				Msg:  IndexInconsistentErr.Description,
+			})
+			return
+		}
 		c.JSON(http.StatusOK, Response{})
 		return
 	}
@@ -482,9 +593,10 @@ func (n *Node) HeartBeat() (err error) {
 		err = fmt.Errorf("at least 3 nodes but only %d", len(nodes))
 		return
 	}
-	respC := make(chan VoteResult)
+	respC := make(chan error)
 	for _, i := range nodes {
-		req := VoteReq{Ip: n.ip, Port: n.port, Term: n.term}
+		req := HeartBeatReq{Ip: n.ip, Port: n.port, Term: n.term, Index: len(n.setLog), logs: n.setLog}
+		// #NOTE: 这里的i只有ip port信息
 		go i.HandleHeartBeat(req, respC)
 	}
 	return
@@ -512,6 +624,7 @@ func vote(req VoteReq, inst Instance, respC chan VoteResult) {
 	respC <- result
 }
 
+// 只有ip port信息
 func (n *Node) HandleReq(req VoteReq, respC chan VoteResult) {
 	var (
 		err error
@@ -582,6 +695,69 @@ func Loop(node INode) {
 		}
 	}
 }
+func (n *Node) rollBackTo(index int) (err error) {
+	tail := len(n.unSetLog) - 1
+	for i := tail; i > index; i-- {
+		op := n.unSetLog[i]
+		n.data[op.Key] = op.Value
+		n.unSetLog = n.unSetLog[:len(n.unSetLog)-1]
+		n.setLog = n.setLog[:len(n.setLog)-1]
+	}
+	return
+}
+
+func (n *Node) applyAll(logs []SetLog) (err error) {
+	for _, log := range logs {
+		err = n.set(log.Key, log.Value)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (n *Node) overWriteLog(logs []SetLog, index int) (err error) {
+	//fmt.Printf("overwrite %s:%s logs:%v  to index:%d logs:%v\n", n.ip, n.port, n.setLog, index, logs)
+	//l := n.setLog[:index]
+	//for _, i := range logs {
+	//	l = append(l, i)
+	//}
+	//n.setLog = l
+	//fmt.Println(n.setLog)
+	err = n.rollBackTo(index - 1)
+	if err != nil {
+		return err
+	}
+	err = n.applyAll(logs)
+	if err != nil {
+		return err
+	}
+	//fmt.Println(n.setLog)
+	//fmt.Println(n.unSetLog)
+	return
+}
+
+func logCompensationHandler(n *Node) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		req := logCompensationReq{}
+		err := c.ShouldBindJSON(&req)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+			return
+		}
+		err = n.overWriteLog(req.Logs, req.Index)
+		if err != nil {
+			c.JSON(http.StatusOK, Response{
+				Code: 1,
+				Msg:  err.Error(),
+			})
+			return
+		}
+	}
+}
 
 func RandTimeout() (timeout time.Duration, err error) {
 	rnd, err := rand.Int(rand.Reader, big.NewInt(5000000000))
@@ -632,12 +808,13 @@ func main() {
 	r.POST("/internal/set", InternalSetHandler(&node))
 	r.POST("/set", SetHandler(&node))
 	r.GET("/get", GetHandler(&node))
+	r.POST("/log/compensation", logCompensationHandler(&node))
 	r.Run(fmt.Sprintf("%s:%s", os.Args[1], os.Args[2]))
 }
 
 type INode interface {
 	HeartBeat() (err error)
-	HandleHeartBeat(req VoteReq, respC chan VoteResult)
+	HandleHeartBeat(req HeartBeatReq, respC chan error)
 	HandleReq(req VoteReq, respC chan VoteResult)
 	HandleSet(key, value string, respC chan error)
 	HandleResult(result VoteResult)

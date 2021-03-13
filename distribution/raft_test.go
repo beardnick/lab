@@ -1,6 +1,9 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -96,6 +99,10 @@ func TestClusterSetGet(t *testing.T) {
 	s, err = n1.Get("hello")
 	assert.Nil(t, err)
 	assert.Equal(t, "world", s)
+	s, err = n2.get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", s)
+
 	err = n1.Set("", "world")
 	assert.Nil(t, err)
 	s, err = n1.Get("")
@@ -123,6 +130,17 @@ func TestClusterSetGet(t *testing.T) {
 	s, err = n2.Get("hello")
 	assert.Nil(t, err)
 	assert.Equal(t, "test", s)
+
+	s, err = n3.get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "test", s)
+
+	//fmt.Println("setlogs")
+	//fmt.Println(n1.setLog)
+	//fmt.Println(n2.setLog)
+	//fmt.Println(n3.setLog)
+	//fmt.Println(n4.setLog)
+	//fmt.Println("setlogs")
 
 	// n1 重新上线
 	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2, n3, n4}, nil }
@@ -185,8 +203,15 @@ func (m MockNode) HandleSet(key, value string, respC chan error) {
 	respC <- m.Node.set(key, value)
 }
 
-func (m MockNode) HandleHeartBeat(req VoteReq, respC chan VoteResult) {
-	m.Node.handleHeartBeat(req)
+func (m MockNode) HandleHeartBeat(req HeartBeatReq, respC chan error) {
+	err := m.Node.handleHeartBeat(req)
+	if errors.Is(err, IndexInconsistentErr) {
+		fmt.Printf("%s:%s\n", m.ip, m.port)
+		index, l := calcCompensation(len(m.setLog), req.logs)
+		//respC <- n.logCompensation(n.ip, n.port, index, l)
+		respC <- m.overWriteLog(l, index)
+	}
+
 }
 
 func (m MockNode) HandleReq(req VoteReq, respC chan VoteResult) {
@@ -207,4 +232,151 @@ func (m OfflineNode) HandleReq(req VoteReq, respC chan VoteResult) {
 }
 func (m OfflineNode) HandleSet(key, value string, respC chan error) {
 	respC <- nil
+}
+
+func TestNode_overWriteLog(t *testing.T) {
+	type fields struct {
+		setLog []SetLog
+	}
+	type args struct {
+		logs  []SetLog
+		index int
+	}
+	tests := []struct {
+		name     string
+		fields   fields
+		args     args
+		wantErr  bool
+		wantLogs []SetLog
+	}{
+		{
+			name: "less over write",
+			fields: fields{
+				setLog: []SetLog{
+					{"1", "1"}, {"2", "2"},
+				},
+			},
+			args: args{
+				logs: []SetLog{
+					{"2", "overwrite"}, {"3", "append"}, {"4", "append"},
+				},
+				index: 1,
+			},
+			wantErr: false,
+			wantLogs: []SetLog{
+				{"1", "1"}, {"2", "overwrite"}, {"3", "append"}, {"4", "append"},
+			},
+		},
+
+		{
+			name: "greater over write",
+			fields: fields{
+				setLog: []SetLog{
+					{"1", "1"}, {"2", "2"}, {"3", "3"}, {"4", "4"},
+				},
+			},
+			args: args{
+				logs: []SetLog{
+					{"2", "overwrite"},
+				},
+				index: 1,
+			},
+			wantErr: false,
+			wantLogs: []SetLog{
+				{"1", "1"}, {"2", "overwrite"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := &Node{}
+			n.applyAll(tt.fields.setLog)
+			if err := n.overWriteLog(tt.args.logs, tt.args.index); (err != nil) != tt.wantErr {
+				t.Errorf("overWriteLog() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(n.setLog, tt.wantLogs) {
+				t.Errorf("overWriteLog() setLog = %v, wantLog %v", tt.fields.setLog, tt.wantLogs)
+			}
+		})
+	}
+}
+
+func Test_calcCompensation(t *testing.T) {
+	type args struct {
+		index int
+		logs  []SetLog
+	}
+	tests := []struct {
+		name  string
+		args  args
+		wantI int
+		wantL []SetLog
+	}{
+		{
+			name: "less",
+			args: args{
+				index: 1,
+				logs: []SetLog{
+					{Key: "1", Value: "1"},
+					{Key: "2", Value: "2"},
+					{Key: "3", Value: "3"},
+					{Key: "4", Value: "4"},
+				},
+			},
+			wantI: 1,
+			wantL: []SetLog{
+				{Key: "2", Value: "2"},
+				{Key: "3", Value: "3"},
+				{Key: "4", Value: "4"},
+			},
+		},
+		{
+			name: "greater",
+			args: args{
+				index: 5,
+				logs: []SetLog{
+					{Key: "1", Value: "1"},
+					{Key: "2", Value: "2"},
+					{Key: "3", Value: "3"},
+					{Key: "4", Value: "4"},
+				},
+			},
+			wantI: 4,
+			wantL: []SetLog{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotI, gotL := calcCompensation(tt.args.index, tt.args.logs)
+			if gotI != tt.wantI {
+				t.Errorf("calcCompensation() gotI = %v, want %v", gotI, tt.wantI)
+			}
+			assert.Equal(t, tt.wantL, gotL)
+		})
+	}
+}
+
+func TestNode_Equal(t *testing.T) {
+	n1 := &Node{ip: "127.0.0.1", port: "9091"}
+	n2 := &Node{ip: "127.0.0.1", port: "9092"}
+
+	mn1 := MockNode{&Node{ip: "127.0.0.1", port: "9091"}}
+	mn2 := MockNode{&Node{ip: "127.0.0.1", port: "9092"}}
+
+	on1 := OfflineNode{MockNode{&Node{ip: "127.0.0.1", port: "9091"}}}
+	on2 := OfflineNode{MockNode{&Node{ip: "127.0.0.1", port: "9092"}}}
+
+	assert.True(t, n1.Equal(n1))
+	assert.True(t, n1.Equal(mn1))
+	assert.True(t, n1.Equal(on1))
+	assert.True(t, mn1.Equal(mn1))
+	assert.True(t, on1.Equal(on1))
+	assert.True(t, mn1.Equal(on1))
+
+	assert.False(t, n1.Equal(n2))
+	assert.False(t, n1.Equal(mn2))
+	assert.False(t, n1.Equal(on2))
+	assert.False(t, mn1.Equal(mn2))
+	assert.False(t, mn1.Equal(on2))
+	assert.False(t, on1.Equal(on2))
 }
