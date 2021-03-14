@@ -194,7 +194,7 @@ func (n *Node) logCompensation(ip, port string, index int, logs []SetLog) (err e
 
 func (n *Node) Set(key, value string) (err error) {
 	if n.role != Leader {
-		err = errors.New("only leader can get")
+		err = errors.New("only leader can get and set")
 		return
 	}
 	n.cluster.Lock()
@@ -234,7 +234,7 @@ FOR:
 
 func (n *Node) Get(key string) (value string, err error) {
 	if n.role != Leader {
-		err = errors.New("only leader can get")
+		err = errors.New("only leader can get and set")
 		return
 	}
 	return n.get(key)
@@ -416,6 +416,7 @@ func InternalSetHandler(node *Node) gin.HandlerFunc {
 				Code: 1,
 				Msg:  err.Error(),
 			})
+			return
 		}
 		err = node.set(req.Key, req.Value)
 		if err != nil {
@@ -423,6 +424,7 @@ func InternalSetHandler(node *Node) gin.HandlerFunc {
 				Code: 1,
 				Msg:  err.Error(),
 			})
+			return
 		}
 		c.JSON(http.StatusOK, Response{
 			Data: SetResp{Key: req.Key, Value: req.Value},
@@ -439,6 +441,7 @@ func SetHandler(node *Node) gin.HandlerFunc {
 				Code: 1,
 				Msg:  err.Error(),
 			})
+			return
 		}
 		err = node.Set(req.Key, req.Value)
 		if err != nil {
@@ -446,6 +449,7 @@ func SetHandler(node *Node) gin.HandlerFunc {
 				Code: 1,
 				Msg:  err.Error(),
 			})
+			return
 		}
 		c.JSON(http.StatusOK, Response{
 			Data: SetResp{Key: req.Key, Value: req.Value},
@@ -462,6 +466,7 @@ func GetHandler(node *Node) gin.HandlerFunc {
 				Code: 1,
 				Msg:  err.Error(),
 			})
+			return
 		}
 		value, err := node.Get(req.Key)
 		if err != nil {
@@ -469,6 +474,7 @@ func GetHandler(node *Node) gin.HandlerFunc {
 				Code: 1,
 				Msg:  err.Error(),
 			})
+			return
 		}
 		c.JSON(http.StatusOK, Response{
 			Data: GetResp{Key: req.Key, Value: value},
