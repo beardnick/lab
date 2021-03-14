@@ -56,7 +56,7 @@ func TestCampaignLeader(t *testing.T) {
 	n2 := MockNode{&Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(0)}}
 	n3 := MockNode{&Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(0)}}
 	n4 := MockNode{&Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(0)}}
-	cluster := MockCluster{}
+	cluster := &MockCluster{}
 
 	// 节点过少
 	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2}, nil }
@@ -84,7 +84,7 @@ func TestClusterSetGet(t *testing.T) {
 	n2 := MockNode{&Node{ip: "127.0.0.1", port: "9092", term: 0, timer: time.NewTimer(0)}}
 	n3 := MockNode{&Node{ip: "127.0.0.1", port: "9093", term: 0, timer: time.NewTimer(0)}}
 	n4 := MockNode{&Node{ip: "127.0.0.1", port: "9094", term: 0, timer: time.NewTimer(0)}}
-	cluster := MockCluster{}
+	cluster := &MockCluster{}
 
 	cluster.nodes = func() (nodes []INode, err error) { return []INode{n1, n2, n3, n4}, nil }
 	n1.cluster = cluster
@@ -191,6 +191,7 @@ func TestRandTimeout(t *testing.T) {
 }
 
 type MockCluster struct {
+	sync.Mutex
 	nodes func() (nodes []INode, err error)
 }
 

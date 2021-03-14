@@ -77,6 +77,7 @@ type Console struct {
 }
 
 type Cluster struct {
+	sync.Mutex
 	Console Console
 }
 
@@ -147,8 +148,9 @@ func (n *Node) HandleSet(key, value string, respC chan error) {
 	}
 	// 服务端处理出错
 	if resp.Code != 0 {
-		respC <- errors.New(resp.Msg)
+		err = errors.New(resp.Msg)
 	}
+	respC <- err
 }
 
 type logCompensationReq struct {
@@ -195,6 +197,8 @@ func (n *Node) Set(key, value string) (err error) {
 		err = errors.New("only leader can get")
 		return
 	}
+	n.cluster.Lock()
+	defer n.cluster.Unlock()
 	nodes, err := n.cluster.Nodes()
 	if err != nil {
 		return
@@ -312,6 +316,8 @@ func (n *Node) CampaignLeader() (succeed bool) {
 	//}
 	n.role = Candidate
 	n.term = n.term + 1
+	n.cluster.Lock()
+	defer n.cluster.Unlock()
 	nodes, err := n.cluster.Nodes()
 	if err != nil {
 		fmt.Println(err)
@@ -377,8 +383,8 @@ type VoteReq struct {
 	Term int    `json:"term,omitempty"`
 }
 type SetReq struct {
-	Key   string
-	Value string
+	Key   string `json:"key"`
+	Value string `json:"value"`
 	Index int
 }
 
@@ -393,7 +399,7 @@ type SetResp struct {
 }
 
 type GetReq struct {
-	Key string
+	Key string `json:"key" form:"key"`
 }
 
 type GetResp struct {
@@ -450,7 +456,7 @@ func SetHandler(node *Node) gin.HandlerFunc {
 func GetHandler(node *Node) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		req := GetReq{}
-		err := c.ShouldBindJSON(&req)
+		err := c.Bind(&req)
 		if err != nil {
 			c.JSON(http.StatusOK, Response{
 				Code: 1,
@@ -585,6 +591,8 @@ func (n *Node) HeartBeatLoop() {
 }
 
 func (n *Node) HeartBeat() (err error) {
+	n.cluster.Lock()
+	defer n.cluster.Unlock()
 	nodes, err := n.cluster.Nodes()
 	if err != nil {
 		return
@@ -796,7 +804,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	node.cluster = Cluster{
+	node.cluster = &Cluster{
 		Console: console,
 	}
 	go Loop(&node)
@@ -826,5 +834,6 @@ type INode interface {
 }
 
 type ICluster interface {
+	sync.Locker
 	Nodes() (nodes []INode, err error)
 }
