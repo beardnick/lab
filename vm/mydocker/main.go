@@ -4,53 +4,80 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	"github.com/spf13/cobra"
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"syscall"
 )
 
-const cgroupMemMount = "/sys/fs/cgroup/memory"
-
 func main() {
-	if os.Args[0] == "/proc/self/exe" {
-		// container process
-		fmt.Println("current pid", syscall.Getpid())
-		cmd := exec.Command("sh", "-c", `stress --vm-bytes 100m --vm-keep -m 1`)
-		//cmd := exec.Command("sh", "-c", `free -h`)
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		err := cmd.Run()
-		if err != nil {
-			log.Fatal(err)
-			os.Exit(1)
-		}
+	log.SetFlags(log.Llongfile)
+	root := &cobra.Command{
+		Use:   "mydocker",
+		Short: "my simple docker",
+		Long:  `a docker create for learning`,
+	}
+	runCmd := &cobra.Command{
+		Use: "run",
+		Run: Run,
+	}
+	runCmd.Flags().Bool("it", false, "run with tty")
+	initCmd := &cobra.Command{
+		Use: "init",
+		Run: Init,
+	}
+	root.AddCommand(runCmd)
+	root.AddCommand(initCmd)
+	err := root.Execute()
+	if err != nil {
+		log.Println(err)
+	}
+}
+
+func Init(cmd *cobra.Command, args []string) {
+	log.Println("init", args)
+	mFlags := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
+	err := syscall.Mount("proc", "/proc", "proc", uintptr(mFlags), "")
+	if err != nil {
+		log.Println(err)
 		return
 	}
-	// self process
-	cmd := exec.Command("/proc/self/exe")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
+	err = syscall.Exec(args[0], args[1:], os.Environ())
+	if err != nil {
+		fmt.Println(err)
 	}
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
-	err := cmd.Start()
+}
+
+func Run(cmd *cobra.Command, args []string) {
+	log.Println("run", args)
+	if len(args) < 1 {
+		log.Println("args is needed")
+		return
+	}
+	tty, err := cmd.Flags().GetBool("it")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	args = append([]string{"init"}, args...)
+	c := exec.Command("/proc/self/exe", args...)
+	if tty {
+		c.Stdin = os.Stdin
+		c.Stderr = os.Stderr
+		c.Stdout = os.Stdout
+	}
+	c.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS |
+			syscall.CLONE_NEWPID |
+			syscall.CLONE_NEWNS |
+			syscall.CLONE_NEWNET |
+			syscall.CLONE_NEWIPC,
+	}
+	err = c.Start()
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("pid", cmd.Process.Pid)
-	cgroup := filepath.Join(cgroupMemMount, "memlimit")
-	// create cgroup
-	os.Mkdir(cgroup, 0755)
-	// add current process to cgroup
-	ioutil.WriteFile(filepath.Join(cgroup, "tasks"), []byte(strconv.Itoa(cmd.Process.Pid)), 0644)
-	// limit process resource
-	ioutil.WriteFile(filepath.Join(cgroup, "memory.limit_in_bytes"), []byte("100m"), 0644)
-	cmd.Process.Wait()
+	c.Wait()
+	os.Exit(-1)
 }
