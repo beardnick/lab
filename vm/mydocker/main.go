@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	fmt.Println("exec")
 	log.SetFlags(log.Llongfile)
 	root := &cobra.Command{
 		Use:   "mydocker",
@@ -37,13 +38,21 @@ func main() {
 
 func Init(cmd *cobra.Command, args []string) {
 	log.Println("init", args)
-	mFlags := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
-	err := syscall.Mount("proc", "/proc", "proc", uintptr(mFlags), "")
+	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
+	// this is needed in new linux kernel
+	// otherwise, the mount ns will not work as expected
+	err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	err = syscall.Exec(args[0], args[1:], os.Environ())
+	mFlags := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
+	err = syscall.Mount("proc", "/proc", "proc", uintptr(mFlags), "")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = syscall.Exec(args[0], args, os.Environ())
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -74,10 +83,8 @@ func Run(cmd *cobra.Command, args []string) {
 			syscall.CLONE_NEWNET |
 			syscall.CLONE_NEWIPC,
 	}
-	err = c.Start()
+	err = c.Run()
 	if err != nil {
 		log.Fatal(err)
 	}
-	c.Wait()
-	os.Exit(-1)
 }
