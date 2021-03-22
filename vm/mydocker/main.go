@@ -5,9 +5,11 @@ package main
 import (
 	"fmt"
 	"github.com/spf13/cobra"
+	"io"
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 )
 
@@ -87,4 +89,66 @@ func Run(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+type Subsystem interface {
+	LimitCgroup(cgroup, limit string) (err error)
+	AddCgroup(cgroup string) (err error)
+	RemoveCgroup(cgroup string) (err error)
+	AddTaskToCgroup(task, cgroup string) (err error)
+	Name() string
+}
+
+// a cgroup only for memory control
+type MemorySubsystem struct {
+}
+
+func (m MemorySubsystem) LimitCgroup(cgroup, limit string) (err error) {
+	root, err := GetCgroupRootPath(cgroup, m.Name())
+	if err != nil {
+		return
+	}
+	return os.WriteFile(filepath.Join(root, "memory.soft_limit_in_bytes"), []byte(limit), 644)
+}
+
+func (m MemorySubsystem) AddCgroup(cgroup string) (err error) {
+	// add cgrou just create sub dir
+	root, err := GetCgroupRootPath(cgroup, m.Name())
+	if err != nil {
+		return
+	}
+	return os.Mkdir(root, 644)
+}
+
+func (m MemorySubsystem) RemoveCgroup(cgroup string) (err error) {
+	root, err := GetCgroupRootPath(cgroup, m.Name())
+	if err != nil {
+		return
+	}
+	return os.RemoveAll(root)
+}
+
+func (m MemorySubsystem) AddTaskToCgroup(task, cgroup string) (err error) {
+	root, err := GetCgroupRootPath(cgroup, m.Name())
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(root, "tasks"), os.O_RDWR, 0755)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, err = io.WriteString(f, task+"\n")
+	return
+}
+
+func (m MemorySubsystem) Name() string {
+	// cannot simply use default value
+	//return "/sys/fs/cgroup/memory"
+	return "memory"
+}
+
+func GetCgroupRootPath(cgroup, subsys string) (root string, err error) {
+	//os.Open("/proc/self/mountinfo")
+	return "/sys/fs/cgroup/memory", nil
 }
