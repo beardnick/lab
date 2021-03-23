@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"github.com/spf13/cobra"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -150,6 +152,25 @@ func (m MemorySubsystem) Name() string {
 }
 
 func GetCgroupRootPath(cgroup, subsys string) (root string, err error) {
-	//os.Open("/proc/self/mountinfo")
-	return "/sys/fs/cgroup/memory", nil
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sub := GetSubsystemPath(f, subsys)
+	root = filepath.Join(sub, cgroup)
+	return
+}
+
+func GetSubsystemPath(mountInfo io.Reader, subSystem string) string {
+	scanner := bufio.NewScanner(mountInfo)
+	for scanner.Scan() {
+		text := scanner.Text()
+		fields := strings.Split(text, " ")
+		opt := strings.Split(fields[len(fields)-1], ",")[0]
+		if opt == subSystem {
+			return fields[4]
+		}
+	}
+	return ""
 }
