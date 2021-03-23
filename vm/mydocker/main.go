@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/spf13/cobra"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -108,7 +109,7 @@ func (m MemorySubsystem) LimitCgroup(cgroup, limit string) (err error) {
 	if err != nil {
 		return
 	}
-	return os.WriteFile(filepath.Join(root, "memory.soft_limit_in_bytes"), []byte(limit), 644)
+	return ioutil.WriteFile(filepath.Join(root, "memory.soft_limit_in_bytes"), []byte(limit), 644)
 }
 
 func (m MemorySubsystem) AddCgroup(cgroup string) (err error) {
