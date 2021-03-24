@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"github.com/spf13/cobra"
 	"io"
@@ -29,6 +30,7 @@ func main() {
 		Run: Run,
 	}
 	runCmd.Flags().Bool("it", false, "run with tty")
+	runCmd.Flags().StringP("memory", "m", "100m", "limit memory resource")
 	initCmd := &cobra.Command{
 		Use: "init",
 		Run: Init,
@@ -88,10 +90,36 @@ func Run(cmd *cobra.Command, args []string) {
 			syscall.CLONE_NEWNET |
 			syscall.CLONE_NEWIPC,
 	}
-	err = c.Run()
+	limit, err := cmd.Flags().GetString("memory")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	cgroup := "mydocker-cgroup"
+	memorySubsys := MemorySubsystem{}
+	err = memorySubsys.AddCgroup(cgroup)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = memorySubsys.LimitCgroup(cgroup, limit)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = c.Start()
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println("before add")
+	fmt.Println("pid", c.Process.Pid)
+	err = memorySubsys.AddTaskToCgroup(c.Process.Pid, cgroup)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer memorySubsys.RemoveCgroup(cgroup)
+	c.Wait()
 }
 
 type Subsystem interface {
@@ -120,7 +148,12 @@ func (m MemorySubsystem) AddCgroup(cgroup string) (err error) {
 	if err != nil {
 		return
 	}
-	return os.Mkdir(root, 644)
+	_, err = os.Stat(root)
+	// create when not exists
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Mkdir(root, 644)
+	}
+	return
 }
 
 func (m MemorySubsystem) RemoveCgroup(cgroup string) (err error) {
@@ -131,7 +164,7 @@ func (m MemorySubsystem) RemoveCgroup(cgroup string) (err error) {
 	return os.RemoveAll(root)
 }
 
-func (m MemorySubsystem) AddTaskToCgroup(task, cgroup string) (err error) {
+func (m MemorySubsystem) AddTaskToCgroup(task int, cgroup string) (err error) {
 	root, err := GetCgroupRootPath(cgroup, m.Name())
 	if err != nil {
 		return
@@ -141,7 +174,7 @@ func (m MemorySubsystem) AddTaskToCgroup(task, cgroup string) (err error) {
 		return
 	}
 	defer f.Close()
-	_, err = io.WriteString(f, task+"\n")
+	_, err = io.WriteString(f, fmt.Sprintf("%d\n", task))
 	return
 }
 
@@ -167,8 +200,11 @@ func GetSubsystemPath(mountInfo io.Reader, subSystem string) string {
 	for scanner.Scan() {
 		text := scanner.Text()
 		fields := strings.Split(text, " ")
-		opt := strings.Split(fields[len(fields)-1], ",")[1]
-		if opt == subSystem {
+		opt := strings.Split(fields[len(fields)-1], ",")
+		if len(opt) < 2 {
+			continue
+		}
+		if opt[1] == subSystem {
 			return fields[4]
 		}
 	}
