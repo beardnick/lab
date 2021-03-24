@@ -19,8 +19,7 @@ func TestGetSubsystemPath(t *testing.T) {
 		{
 			name: "memory",
 			args: args{
-				mountInfo: bytes.NewBufferString(`
-5328 5325 0:21 / /sys/fs/cgroup/blkio rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,blkio
+				mountInfo: bytes.NewBufferString(`5328 5325 0:21 / /sys/fs/cgroup/blkio rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,blkio
 5330 5325 0:22 / /sys/fs/cgroup/pids rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,pids
 5331 5325 0:23 / /sys/fs/cgroup/cpuset rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,cpuset
 5332 5325 0:24 / /sys/fs/cgroup/memory rw,nosuid,nodev,noexec,relatime - cgroup cgroup rw,memory

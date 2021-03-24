@@ -167,7 +167,7 @@ func GetSubsystemPath(mountInfo io.Reader, subSystem string) string {
 	for scanner.Scan() {
 		text := scanner.Text()
 		fields := strings.Split(text, " ")
-		opt := strings.Split(fields[len(fields)-1], ",")[0]
+		opt := strings.Split(fields[len(fields)-1], ",")[1]
 		if opt == subSystem {
 			return fields[4]
 		}
