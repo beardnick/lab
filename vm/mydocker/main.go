@@ -18,7 +18,6 @@ import (
 )
 
 func main() {
-	fmt.Println("exec")
 	log.SetFlags(log.Llongfile)
 	root := &cobra.Command{
 		Use:   "mydocker",
@@ -44,7 +43,7 @@ func main() {
 }
 
 func Init(cmd *cobra.Command, args []string) {
-	log.Println("init", args)
+	fmt.Println("init", args)
 	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
 	// this is needed in new linux kernel
 	// otherwise, the mount ns will not work as expected
@@ -66,7 +65,7 @@ func Init(cmd *cobra.Command, args []string) {
 }
 
 func Run(cmd *cobra.Command, args []string) {
-	log.Println("run", args)
+	fmt.Println("run", args)
 	if len(args) < 1 {
 		log.Println("args is needed")
 		return
@@ -111,7 +110,6 @@ func Run(cmd *cobra.Command, args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("before add")
 	fmt.Println("pid", c.Process.Pid)
 	err = memorySubsys.AddTaskToCgroup(c.Process.Pid, cgroup)
 	if err != nil {
@@ -139,7 +137,8 @@ func (m MemorySubsystem) LimitCgroup(cgroup, limit string) (err error) {
 	if err != nil {
 		return
 	}
-	return ioutil.WriteFile(filepath.Join(root, "memory.soft_limit_in_bytes"), []byte(limit), 644)
+	// don't use sort_limit_in_bytes
+	return ioutil.WriteFile(filepath.Join(root, "memory.limit_in_bytes"), []byte(limit), 644)
 }
 
 func (m MemorySubsystem) AddCgroup(cgroup string) (err error) {
