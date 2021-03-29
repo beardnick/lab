@@ -23,10 +23,16 @@ func main() {
 		Use:   "mydocker",
 		Short: "my simple docker",
 		Long:  `a docker create for learning`,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{
+			UnknownFlags: true,
+		},
 	}
 	runCmd := &cobra.Command{
 		Use: "run",
 		Run: Run,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{
+			UnknownFlags: true,
+		},
 	}
 	runCmd.Flags().Bool("it", false, "run with tty")
 	runCmd.Flags().StringP("memory", "m", "100m", "limit memory resource")
@@ -47,7 +53,13 @@ func Init(cmd *cobra.Command, args []string) {
 	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
 	// this is needed in new linux kernel
 	// otherwise, the mount ns will not work as expected
-	err := syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
+	cmds, err := readUserCommand()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	log.Println("cmds:", cmds)
+	err = syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
 	if err != nil {
 		log.Println(err)
 		return
@@ -58,9 +70,14 @@ func Init(cmd *cobra.Command, args []string) {
 		log.Println(err)
 		return
 	}
-	err = syscall.Exec(args[0], args, os.Environ())
+	path, err := exec.LookPath(cmds[0])
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
+		return
+	}
+	err = syscall.Exec(path, cmds, os.Environ())
+	if err != nil {
+		log.Println(err)
 	}
 }
 
@@ -70,13 +87,18 @@ func Run(cmd *cobra.Command, args []string) {
 		log.Println("args is needed")
 		return
 	}
+	args = strings.Fields(args[0])
 	tty, err := cmd.Flags().GetBool("it")
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	args = append([]string{"init"}, args...)
-	c := exec.Command("/proc/self/exe", args...)
+	read, write, err := NewPipe()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	c := exec.Command("/proc/self/exe", "init")
 	if tty {
 		c.Stdin = os.Stdin
 		c.Stderr = os.Stderr
@@ -106,10 +128,20 @@ func Run(cmd *cobra.Command, args []string) {
 		log.Println(err)
 		return
 	}
+	// pass pipe to sub process
+	c.ExtraFiles = []*os.File{read}
 	err = c.Start()
 	if err != nil {
 		log.Fatal(err)
 	}
+	_, err = write.WriteString(strings.Join(args, " "))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	// #NOTE don't use defer write.close()
+	// write string succeed only after write.close()
+	write.Close()
 	fmt.Println("pid", c.Process.Pid)
 	err = memorySubsys.AddTaskToCgroup(c.Process.Pid, cgroup)
 	if err != nil {
@@ -208,4 +240,20 @@ func GetSubsystemPath(mountInfo io.Reader, subSystem string) string {
 		}
 	}
 	return ""
+}
+
+func NewPipe() (read, write *os.File, err error) {
+	read, write, err = os.Pipe()
+	return
+}
+
+func readUserCommand() (args []string, err error) {
+	// stdin 0 staout 1 stderr 2
+	pipe := os.NewFile(uintptr(3), "pipe")
+	msg, err := ioutil.ReadAll(pipe)
+	if err != nil {
+		return
+	}
+	args = strings.Split(string(msg), " ")
+	return
 }
