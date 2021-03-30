@@ -50,15 +50,15 @@ func main() {
 
 func Init(cmd *cobra.Command, args []string) {
 	fmt.Println("init", args)
-	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
-	// this is needed in new linux kernel
-	// otherwise, the mount ns will not work as expected
 	cmds, err := readUserCommand()
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	log.Println("cmds:", cmds)
+	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
+	// this is needed in new linux kernel
+	// otherwise, the mount ns will not work as expected
 	err = syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
 	if err != nil {
 		log.Println(err)
@@ -87,29 +87,25 @@ func Run(cmd *cobra.Command, args []string) {
 		log.Println("args is needed")
 		return
 	}
+	init := NewInitCommand()
 	args = strings.Fields(args[0])
+	err := SendArgs(init, args)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	tty, err := cmd.Flags().GetBool("it")
 	if err != nil {
 		log.Println(err)
 		return
 	}
-	read, write, err := NewPipe()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	c := exec.Command("/proc/self/exe", "init")
 	if tty {
-		c.Stdin = os.Stdin
-		c.Stderr = os.Stderr
-		c.Stdout = os.Stdout
+		SetTty(init)
 	}
-	c.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWUTS |
-			syscall.CLONE_NEWPID |
-			syscall.CLONE_NEWNS |
-			syscall.CLONE_NEWNET |
-			syscall.CLONE_NEWIPC,
+	err = init.Start()
+	if err != nil {
+		log.Fatal(err)
+		return
 	}
 	limit, err := cmd.Flags().GetString("memory")
 	if err != nil {
@@ -117,39 +113,56 @@ func Run(cmd *cobra.Command, args []string) {
 		return
 	}
 	cgroup := "mydocker-cgroup"
+	subsys, err := LimitMemory(init.Process.Pid, cgroup, limit)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer subsys.RemoveCgroup(cgroup)
+	init.Wait()
+}
+
+func NewInitCommand() *exec.Cmd {
+	c := exec.Command("/proc/self/exe", "init")
+	c.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWUTS |
+			syscall.CLONE_NEWPID |
+			syscall.CLONE_NEWNS |
+			syscall.CLONE_NEWNET |
+			syscall.CLONE_NEWIPC,
+	}
+	return c
+}
+func SetTty(c *exec.Cmd) {
+	c.Stdin = os.Stdin
+	c.Stderr = os.Stderr
+	c.Stdout = os.Stdout
+}
+func LimitMemory(pid int, cgroup, limit string) (subsys MemorySubsystem, err error) {
 	memorySubsys := MemorySubsystem{}
 	err = memorySubsys.AddCgroup(cgroup)
 	if err != nil {
-		log.Println(err)
 		return
 	}
 	err = memorySubsys.LimitCgroup(cgroup, limit)
 	if err != nil {
-		log.Println(err)
 		return
 	}
-	// pass pipe to sub process
-	c.ExtraFiles = []*os.File{read}
-	err = c.Start()
+	err = memorySubsys.AddTaskToCgroup(pid, cgroup)
+	return
+}
+func SendArgs(child *exec.Cmd, args []string) (err error) {
+	read, write, err := NewPipe()
 	if err != nil {
-		log.Fatal(err)
+		return
 	}
+	child.ExtraFiles = []*os.File{read}
 	_, err = write.WriteString(strings.Join(args, " "))
 	if err != nil {
-		log.Println(err)
 		return
 	}
-	// #NOTE don't use defer write.close()
-	// write string succeed only after write.close()
-	write.Close()
-	fmt.Println("pid", c.Process.Pid)
-	err = memorySubsys.AddTaskToCgroup(c.Process.Pid, cgroup)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer memorySubsys.RemoveCgroup(cgroup)
-	c.Wait()
+	err = write.Close()
+	return
 }
 
 type Subsystem interface {
