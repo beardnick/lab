@@ -270,3 +270,31 @@ func readUserCommand() (args []string, err error) {
 	args = strings.Split(string(msg), " ")
 	return
 }
+
+func pivotRoot(root string) (err error) {
+	// todo: why mount the same root?
+	err = syscall.Mount(root, root, "bind", syscall.MS_BIND|syscall.MS_REC, "")
+	if err != nil {
+		return
+	}
+	pivotDir := filepath.Join(root, ".pivot_root")
+	err = os.Mkdir(pivotDir, 0777)
+	if err != nil {
+		return
+	}
+	err = syscall.PivotRoot(root, pivotDir)
+	if err != nil {
+		return
+	}
+	err = syscall.Chdir("/")
+	if err != nil {
+		return
+	}
+	pivotDir = filepath.Join("/", ".pivot_root")
+	err = syscall.Unmount(pivotDir, syscall.MNT_DETACH)
+	if err != nil {
+		return
+	}
+	err = os.Remove(pivotDir)
+	return
+}
