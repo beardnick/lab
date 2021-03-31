@@ -49,6 +49,11 @@ func main() {
 }
 
 func Init(cmd *cobra.Command, args []string) {
+	err := setUpMount()
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	fmt.Println("init", args)
 	cmds, err := readUserCommand()
 	if err != nil {
@@ -56,20 +61,6 @@ func Init(cmd *cobra.Command, args []string) {
 		return
 	}
 	log.Println("cmds:", cmds)
-	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
-	// this is needed in new linux kernel
-	// otherwise, the mount ns will not work as expected
-	err = syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	mFlags := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
-	err = syscall.Mount("proc", "/proc", "proc", uintptr(mFlags), "")
-	if err != nil {
-		log.Println(err)
-		return
-	}
 	path, err := exec.LookPath(cmds[0])
 	if err != nil {
 		log.Println(err)
@@ -102,6 +93,7 @@ func Run(cmd *cobra.Command, args []string) {
 	if tty {
 		SetTty(init)
 	}
+	init.Dir = "/data/busybox"
 	err = init.Start()
 	if err != nil {
 		log.Fatal(err)
@@ -296,5 +288,27 @@ func pivotRoot(root string) (err error) {
 		return
 	}
 	err = os.Remove(pivotDir)
+	return
+}
+
+func setUpMount() (err error) {
+	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
+	// this is needed in new linux kernel
+	// otherwise, the mount ns will not work as expected
+	err = syscall.Mount("", "/", "", syscall.MS_PRIVATE|syscall.MS_REC, "")
+	if err != nil {
+		return
+	}
+	pwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	err = pivotRoot(pwd)
+	defaultFlag := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
+	err = syscall.Mount("proc", "/proc", "proc", uintptr(defaultFlag), "")
+	if err != nil {
+		return
+	}
+	err = syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_STRICTATIME, "mode=755")
 	return
 }
