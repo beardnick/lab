@@ -68,7 +68,6 @@ func Init(cmd *cobra.Command, args []string) {
 		log.Println(err)
 		return
 	}
-	fmt.Println("look up path", path)
 	err = syscall.Exec(path, cmds, os.Environ())
 	if err != nil {
 		log.Println(err)
@@ -267,7 +266,6 @@ func readUserCommand() (args []string, err error) {
 }
 
 func pivotRoot(root string) (err error) {
-	fmt.Println("pivotroot", root)
 	// todo: why mount the same root?
 	err = syscall.Mount(root, root, "bind", syscall.MS_BIND|syscall.MS_REC, "")
 	if err != nil {
@@ -310,7 +308,6 @@ func setUpMount() (err error) {
 	if err != nil {
 		return
 	}
-	fmt.Println("workspace", workspace)
 	err = pivotRoot(filepath.Join(workspace, "merger"))
 	if err != nil {
 		return
@@ -333,12 +330,11 @@ func NewWorkspace(dir, image string) (err error) {
 	lower := filepath.Join(dir, "/lower")
 	upper := filepath.Join(dir, "/upper")
 	worker := filepath.Join(dir, "/worker")
-	fmt.Println("merger", merger)
 	err = CopyDir(image, lower)
 	if err != nil {
 		return
 	}
-	defaultFlag := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
+	defaultFlag := syscall.MS_MGC_VAL | syscall.MS_NODEV
 	err = syscall.Mount("overlayfs:/overlay", merger, "overlay", uintptr(defaultFlag), fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lower, upper, worker))
 	return
 }
@@ -411,4 +407,18 @@ func CopyFile(src, dst string) error {
 		return err
 	}
 	return os.Chmod(dst, srcinfo.Mode())
+}
+
+func LsDir(dir string) (err error) {
+	fds, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if len(fds) == 0 {
+		fmt.Println("empty")
+	}
+	for _, fd := range fds {
+		fmt.Printf("%s %d %s %s\n", fd.Mode(), fd.Size(), fd.ModTime(), fd.Name())
+	}
+	return
 }
