@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"github.com/spf13/cobra"
 	"io"
 	"io/ioutil"
 	"log"
@@ -15,6 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/google/uuid"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -66,6 +68,7 @@ func Init(cmd *cobra.Command, args []string) {
 		log.Println(err)
 		return
 	}
+	fmt.Println("look up path", path)
 	err = syscall.Exec(path, cmds, os.Environ())
 	if err != nil {
 		log.Println(err)
@@ -264,6 +267,7 @@ func readUserCommand() (args []string, err error) {
 }
 
 func pivotRoot(root string) (err error) {
+	fmt.Println("pivotroot", root)
 	// todo: why mount the same root?
 	err = syscall.Mount(root, root, "bind", syscall.MS_BIND|syscall.MS_REC, "")
 	if err != nil {
@@ -274,6 +278,8 @@ func pivotRoot(root string) (err error) {
 	if err != nil {
 		return
 	}
+	// set root as newroot
+	// put old root to pivotDir
 	err = syscall.PivotRoot(root, pivotDir)
 	if err != nil {
 		return
@@ -299,11 +305,16 @@ func setUpMount() (err error) {
 	if err != nil {
 		return
 	}
-	pwd, err := os.Getwd()
+	workspace := filepath.Join("/data", uuid.NewString())
+	err = NewWorkspace(workspace, "/data/busybox")
 	if err != nil {
 		return
 	}
-	err = pivotRoot(pwd)
+	fmt.Println("workspace", workspace)
+	err = pivotRoot(filepath.Join(workspace, "merger"))
+	if err != nil {
+		return
+	}
 	defaultFlag := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
 	err = syscall.Mount("proc", "/proc", "proc", uintptr(defaultFlag), "")
 	if err != nil {
@@ -311,4 +322,93 @@ func setUpMount() (err error) {
 	}
 	err = syscall.Mount("tmpfs", "/dev", "tmpfs", syscall.MS_NOSUID|syscall.MS_STRICTATIME, "mode=755")
 	return
+}
+
+func NewWorkspace(dir, image string) (err error) {
+	err = MkOverlayDir(dir)
+	if err != nil {
+		return
+	}
+	merger := filepath.Join(dir, "/merger")
+	lower := filepath.Join(dir, "/lower")
+	upper := filepath.Join(dir, "/upper")
+	worker := filepath.Join(dir, "/worker")
+	fmt.Println("merger", merger)
+	err = CopyDir(image, lower)
+	if err != nil {
+		return
+	}
+	defaultFlag := syscall.MS_NOEXEC | syscall.MS_NOSUID | syscall.MS_NODEV
+	err = syscall.Mount("overlayfs:/overlay", merger, "overlay", uintptr(defaultFlag), fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lower, upper, worker))
+	return
+}
+
+func MkOverlayDir(dir string) (err error) {
+	dirs := []string{"lower", "upper", "merger", "worker"}
+	for _, v := range dirs {
+		err = os.MkdirAll(filepath.Join(dir, v), 0777)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func CopyDir(src string, dst string) error {
+	var err error
+	var fds []os.FileInfo
+	var srcinfo os.FileInfo
+
+	if srcinfo, err = os.Stat(src); err != nil {
+		return err
+	}
+
+	if err = os.MkdirAll(dst, srcinfo.Mode()); err != nil {
+		return err
+	}
+
+	if fds, err = ioutil.ReadDir(src); err != nil {
+		return err
+	}
+	for _, fd := range fds {
+		srcfp := filepath.Join(src, fd.Name())
+		dstfp := filepath.Join(dst, fd.Name())
+
+		if fd.IsDir() {
+			if err = CopyDir(srcfp, dstfp); err != nil {
+				fmt.Println(err)
+			}
+		} else {
+			if err = CopyFile(srcfp, dstfp); err != nil {
+				fmt.Println(err)
+			}
+		}
+	}
+	return nil
+}
+
+// File copies a single file from src to dst
+func CopyFile(src, dst string) error {
+	var err error
+	var srcfd *os.File
+	var dstfd *os.File
+	var srcinfo os.FileInfo
+
+	if srcfd, err = os.Open(src); err != nil {
+		return err
+	}
+	defer srcfd.Close()
+
+	if dstfd, err = os.Create(dst); err != nil {
+		return err
+	}
+	defer dstfd.Close()
+
+	if _, err = io.Copy(dstfd, srcfd); err != nil {
+		return err
+	}
+	if srcinfo, err = os.Stat(src); err != nil {
+		return err
+	}
+	return os.Chmod(dst, srcinfo.Mode())
 }
