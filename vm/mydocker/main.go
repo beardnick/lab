@@ -38,10 +38,12 @@ func main() {
 	}
 	runCmd.Flags().Bool("it", false, "run with tty")
 	runCmd.Flags().StringP("memory", "m", "100m", "limit memory resource")
+	runCmd.Flags().String("image", "", "image path")
 	initCmd := &cobra.Command{
 		Use: "init",
 		Run: Init,
 	}
+	initCmd.Flags().String("image", "", "image path")
 	root.AddCommand(runCmd)
 	root.AddCommand(initCmd)
 	err := root.Execute()
@@ -51,7 +53,12 @@ func main() {
 }
 
 func Init(cmd *cobra.Command, args []string) {
-	err := setUpMount()
+	image, err := cmd.Flags().GetString("image")
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = setUpMount(image)
 	if err != nil {
 		log.Println(err)
 		return
@@ -80,9 +87,13 @@ func Run(cmd *cobra.Command, args []string) {
 		log.Println("args is needed")
 		return
 	}
-	init := NewInitCommand()
+	init, err := NewInitCommand(*cmd)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	args = strings.Fields(args[0])
-	err := SendArgs(init, args)
+	err = SendArgs(init, args)
 	if err != nil {
 		log.Println(err)
 		return
@@ -116,8 +127,24 @@ func Run(cmd *cobra.Command, args []string) {
 	init.Wait()
 }
 
-func NewInitCommand() *exec.Cmd {
-	c := exec.Command("/proc/self/exe", "init")
+func BuildStringFlag(cmd cobra.Command, f string) (args []string, err error) {
+	args = make([]string, 2)
+	s, err := cmd.Flags().GetString(f)
+	if err != nil {
+		return
+	}
+	args[0], args[1] = fmt.Sprintf("--%s", f), s
+	return
+}
+
+func NewInitCommand(cmd cobra.Command) (c *exec.Cmd, err error) {
+	args := []string{"init"}
+	flags, err := BuildStringFlag(cmd, "image")
+	if err != nil {
+		return
+	}
+	args = append(args, flags...)
+	c = exec.Command("/proc/self/exe", args...)
 	c.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWUTS |
 			syscall.CLONE_NEWPID |
@@ -125,7 +152,7 @@ func NewInitCommand() *exec.Cmd {
 			syscall.CLONE_NEWNET |
 			syscall.CLONE_NEWIPC,
 	}
-	return c
+	return
 }
 func SetTty(c *exec.Cmd) {
 	c.Stdin = os.Stdin
@@ -295,7 +322,7 @@ func pivotRoot(root string) (err error) {
 	return
 }
 
-func setUpMount() (err error) {
+func setUpMount(image string) (err error) {
 	// https://github.com/xianlubird/mydocker/issues/58#issuecomment-574059632
 	// this is needed in new linux kernel
 	// otherwise, the mount ns will not work as expected
@@ -304,7 +331,7 @@ func setUpMount() (err error) {
 		return
 	}
 	workspace := filepath.Join("/data", uuid.NewString())
-	err = NewWorkspace(workspace, "/data/busybox")
+	err = NewWorkspace(workspace, image)
 	if err != nil {
 		return
 	}
