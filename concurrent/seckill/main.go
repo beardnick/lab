@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/gin-gonic/gin"
 	"io/ioutil"
 	"log"
 	"os"
@@ -37,4 +38,8 @@ func main() {
 	if err != nil {
 		log.Fatal("init db failed", err)
 	}
+	router := gin.New()
+	router.Use(gin.Recovery())
+	RegisterRouters(router)
+	router.Run(":8080")
 }
