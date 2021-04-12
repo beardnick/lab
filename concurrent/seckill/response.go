@@ -1,41 +1,69 @@
 package main
 
 import (
-	"encoding/json"
-	"log"
+	"github.com/gin-gonic/gin"
+	"net/http"
 )
 
+var (
+	ParameterErr = Err{Code: 4000}
+	InternalErr  = Err{Code: 5000}
+	UnknownErr   = Err{Code: 6000}
+)
+
+type Err struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+}
+
+func (e Err) Is(err Err) bool {
+	return e.Code == err.Code
+}
+
+func (e Err) Of(msg string) Err {
+	return Err{
+		Code: e.Code,
+		Msg:  msg,
+	}
+}
+
+func (e Err) OfErr(err error) Err {
+	if err == nil {
+		return Err{}
+	}
+	return e.Of(err.Error())
+}
+
 type Response struct {
-	data map[string]interface{}
+	Err
+	Data interface{} `json:"data"`
 }
 
-func (r *Response) addAttribute(name string, data interface{}) {
-	r.data[name] = data
-}
-
-func (r *Response) json() []byte {
-	j, err := json.Marshal(r.data)
-	if err != nil {
-		log.Println(err.Error())
-		//log.Fatal(err.Error())
-		return []byte{}
+func ErrResponse(c *gin.Context, err Err) {
+	if err.Is(InternalErr) {
+		c.JSON(http.StatusInternalServerError, Response{
+			Err:  err,
+			Data: nil,
+		})
+		return
 	}
-	return j
+	c.JSON(http.StatusOK, Response{
+		Err:  err,
+		Data: nil,
+	})
 }
 
-func NewResponse() Response {
-	return Response{make(map[string]interface{})}
+func SuccessResponse(c *gin.Context, data interface{}) {
+	c.JSON(http.StatusOK, Response{
+		Err:  Err{},
+		Data: data,
+	})
 }
 
-func ErrResponse(err error) interface{} {
-	resp := NewResponse()
-	resp.addAttribute("error", err.Error())
-	return resp.json()
-}
-
-func ResultOrErrResponse(data interface{}, err error) interface{}{
-	if err != nil {
-		return ErrResponse(err)
+func ErrOrSuccessResponse(c *gin.Context, data interface{}, err Err) {
+	if err.Code != 0 {
+		ErrResponse(c, err)
+		return
 	}
-	return data
+	SuccessResponse(c, data)
 }

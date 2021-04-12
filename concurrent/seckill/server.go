@@ -1,9 +1,7 @@
 package main
 
 import (
-	"errors"
 	"github.com/gin-gonic/gin"
-	"net/http"
 )
 
 func RegisterRouters(router *gin.Engine) {
@@ -14,23 +12,21 @@ func RegisterRouters(router *gin.Engine) {
 func GetProductionCntHandler(c *gin.Context) {
 	id := c.Query("id")
 	if id == "" {
-		c.JSON(http.StatusOK, ErrResponse(errors.New("id is empty")))
+		ErrResponse(c, ParameterErr.Of("id is empty"))
 		return
 	}
 	p := NewProductionDao()
 	r, err := p.GetProductionCnt(id)
-	c.JSON(http.StatusOK, ResultOrErrResponse(r, err))
+	ErrOrSuccessResponse(c, r, UnknownErr.OfErr(err))
 }
 
 func CreateProductionHandler(c *gin.Context) {
 	production := Production{}
 	err := c.ShouldBindJSON(&production)
 	if err != nil {
-		c.JSON(http.StatusOK, ErrResponse(err))
+		ErrResponse(c, UnknownErr.Of(err.Error()))
 		return
 	}
 	id, err := NewProductionDao().Insert(production)
-	resp := NewResponse()
-	resp.addAttribute("id", id)
-	c.JSON(http.StatusOK, ResultOrErrResponse(resp, err))
+	ErrOrSuccessResponse(c, gin.H{"id": id}, UnknownErr.OfErr(err))
 }
