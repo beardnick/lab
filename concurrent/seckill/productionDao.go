@@ -26,7 +26,7 @@ func (p ProductionDao) Insert(prod Production) (id string, err error) {
 		return
 	}
 	id = prod.Guid
-	err = p.db.Create(prod).Error
+	err = p.db.Create(&prod).Error
 	return
 }
 
