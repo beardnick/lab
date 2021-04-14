@@ -25,7 +25,13 @@ func InitDb() (err error) {
 	if err != nil {
 		return
 	}
-	err = db.AutoMigrate(&Production{})
+	models := []interface{}{&Production{},&Order{}}
+	for _, model := range models {
+		err = db.AutoMigrate(model)
+		if err != nil {
+			return
+		}
+	}
 	return
 }
 

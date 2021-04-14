@@ -1,6 +1,8 @@
 package main
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/gorm"
+)
 
 type ProductionDao struct {
 	db *gorm.DB
@@ -11,6 +13,10 @@ func NewProductionDao() ProductionDao {
 	return ProductionDao{
 		db: db,
 	}
+}
+
+func (p ProductionDao) model() *gorm.DB {
+	return p.db.Model(&Production{})
 }
 
 func (p ProductionDao) GetProductionCnt(id string) (cnt int, err error) {
@@ -30,6 +36,7 @@ func (p ProductionDao) Insert(prod Production) (id string, err error) {
 	return
 }
 
-//func (p ProductionDao) ByGuid(id string)(, err error)  {
-//	p.DB.Take(&Production{Guid: id})
-//}
+func (p ProductionDao) UpdateCnt(cnt int, production string) (id string, err error) {
+	err = p.model().Where("guid", production).Update("cnt", cnt).Error
+	return
+}
