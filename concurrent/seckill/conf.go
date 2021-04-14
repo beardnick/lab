@@ -2,8 +2,15 @@ package main
 
 import "github.com/BurntSushi/toml"
 
+type RedisConf struct {
+	Addr   string
+	Passwd string
+	Db     int
+}
+
 type Config struct {
-	Dsn string
+	Dsn   string
+	Redis RedisConf
 }
 
 var config Config
