@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: zk_deploy
+  name: zk-deploy
   labels:
     app: zk
 spec:
