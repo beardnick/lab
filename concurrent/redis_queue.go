@@ -29,17 +29,22 @@ func LocalRedis() (client redis.UniversalClient, err error) {
 	return
 }
 
+func NewProducer(topic string, client redis.UniversalClient) *RedisProducer {
+	return &RedisProducer{
+		Topic: topic,
+		Conn:  client,
+	}
+}
+
 type RedisProducer struct {
 	Topic string
 	Conn  redis.UniversalClient
 }
 
-func (p *RedisProducer) AddMsg(msg interface{}) (err error) {
+func (p *RedisProducer) AddMsg(msg map[string]interface{}) (err error) {
 	_, err = p.Conn.XAdd(&redis.XAddArgs{
 		Stream: p.Topic,
-		Values: map[string]interface{}{
-			"value": fmt.Sprint(msg),
-		},
+		Values: msg,
 	}).Result()
 	return
 }
@@ -87,16 +92,13 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	p := &RedisProducer{
-		Topic: "mystream",
-		Conn:  client,
-	}
+	p := NewProducer("mystream", client)
 	c := NewConsumer("mystream", "0", client)
-	err = p.AddMsg("hello")
+	err = p.AddMsg(map[string]interface{}{"value": "hello"})
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = p.AddMsg("world")
+	err = p.AddMsg(map[string]interface{}{"value": "world"})
 	if err != nil {
 		log.Fatal(err)
 	}
