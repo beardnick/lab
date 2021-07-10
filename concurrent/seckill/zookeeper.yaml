@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zk-deploy
+  labels:
+    app: zk
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: zk
+  template:
+    metadata:
+      labels:
+        app: zk
+    spec:
+      containers:
+      - name: zk
+        image: wurstmeister/zookeeper
+        ports:
+        - containerPort: 2181

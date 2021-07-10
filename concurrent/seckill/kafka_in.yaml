@@ -1,0 +1,12 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: kafka-in
+spec:
+  rules:
+    - host: test.kafka.com
+    - http:
+        paths:
+        - backend:
+            serviceName: kafka-svc
+            servicePort: 30001
