@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v7"
 	"log"
@@ -87,25 +86,25 @@ func (c *RedisConsumer) Msg() map[string]interface{} {
 	return <-c.msgchan
 }
 
-func main() {
-	client, err := LocalRedis()
-	if err != nil {
-		log.Fatalln(err)
-	}
-	p := NewProducer("mystream", client)
-	c := NewConsumer("mystream", "0", client)
-	err = p.AddMsg(map[string]interface{}{"value": "hello"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = p.AddMsg(map[string]interface{}{"value": "world"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	c.Start()
-	s := c.Msg()
-	fmt.Println("read msg:", s)
-	s = c.Msg()
-
-	fmt.Println("read msg:", s)
-}
+//func main() {
+//	client, err := LocalRedis()
+//	if err != nil {
+//		log.Fatalln(err)
+//	}
+//	p := NewProducer("mystream", client)
+//	c := NewConsumer("mystream", "0", client)
+//	err = p.AddMsg(map[string]interface{}{"value": "hello"})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	err = p.AddMsg(map[string]interface{}{"value": "world"})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	c.Start()
+//	s := c.Msg()
+//	fmt.Println("read msg:", s)
+//	s = c.Msg()
+//
+//	fmt.Println("read msg:", s)
+//}

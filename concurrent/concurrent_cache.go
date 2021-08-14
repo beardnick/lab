@@ -106,9 +106,9 @@ func Hit(c *gin.Context) {
 	c.String(http.StatusOK, fmt.Sprintf("db:%d cache:%d", dbCnt, cnt-dbCnt))
 }
 
-func main() {
-	router := gin.Default()
-	router.GET("/data", ConcurrentCache2)
-	router.GET("/hit", Hit)
-	router.Run("0.0.0.0:80")
-}
+//func main() {
+//	router := gin.Default()
+//	router.GET("/data", ConcurrentCache2)
+//	router.GET("/hit", Hit)
+//	router.Run("0.0.0.0:80")
+//}

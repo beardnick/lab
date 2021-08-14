@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // 无状态
@@ -20,8 +20,8 @@ func Swap(a, b *int) {
 }
 
 // 反例 有状态
-func NewCounter(cnt int) Counter {
-	return Counter{cnt}
+func NewCounter(cnt int) *Counter {
+	return &Counter{cnt}
 }
 
 type Counter struct {
@@ -34,21 +34,37 @@ func (c *Counter) Count() int {
 	return c.Cnt
 }
 
-func ConcurrentCounter(n int) int {
-	c := NewCounter(0)
-	wg := &sync.WaitGroup{}
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(c *Counter) {
-			c.Count()
-			wg.Done()
-		}(&c)
-	}
-	wg.Wait()
+type CounterWithLock struct {
+	Cnt int
+	sync.Mutex
+}
+
+func (c *CounterWithLock) Count() int {
+	c.Lock()
+	defer c.Unlock()
+	c.Cnt = c.Cnt + 1
 	return c.Cnt
 }
 
-func main() {
-	r := ConcurrentCounter(1000)
-	fmt.Println(r)
+func NewCounterWithLock(cnt int) *CounterWithLock {
+	return &CounterWithLock{
+		Cnt:   0,
+		Mutex: sync.Mutex{},
+	}
+
+}
+
+type CounterLockFree struct {
+	Cnt int64
+}
+
+func (c *CounterLockFree) Count() int {
+	r := atomic.AddInt64(&c.Cnt, 1)
+	return int(r)
+}
+
+func NewCounterLockFree(cnt int) *CounterLockFree {
+	return &CounterLockFree{
+		Cnt: int64(cnt),
+	}
 }
