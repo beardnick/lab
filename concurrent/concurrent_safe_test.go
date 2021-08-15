@@ -24,14 +24,13 @@ func TestCounter_Count(t *testing.T) {
 	ConcurrentInvoker(times, func() {
 		c.Count()
 	})
-	// counter with cnt is concurrent unsafe
+	// 非并发安全
 	assert.NotEqual(t, c.Cnt, times)
 
 	clock := NewCounterWithLock(0)
 	ConcurrentInvoker(times, func() {
 		clock.Count()
 	})
-	// counter with lock is concurrent unsafe
 	assert.Equal(t, clock.Cnt, times)
 
 	clockFree := NewCounterLockFree(0)
@@ -39,4 +38,12 @@ func TestCounter_Count(t *testing.T) {
 		clockFree.Count()
 	})
 	assert.Equal(t, int(clockFree.Cnt), times)
+
+	cSelect := NewCounterSelect(0)
+	cSelect.Start()
+	defer cSelect.Stop()
+	ConcurrentInvoker(times, func() {
+		cSelect.Count()
+	})
+	assert.Equal(t, int(cSelect.Cnt), times)
 }

@@ -68,3 +68,44 @@ func NewCounterLockFree(cnt int) *CounterLockFree {
 		Cnt: int64(cnt),
 	}
 }
+
+type CounterSelect struct {
+	Cnt   int
+	cntC  chan int
+	cntR  chan int
+	stopC chan int
+}
+
+func (c *CounterSelect) Count() int {
+	c.cntC <- 1
+	return <-c.cntR
+}
+func (c *CounterSelect) Stop() {
+	c.stopC <- 1
+}
+
+// 这里的cnt状态限制在同一个goroutine里面,所以也是并发安全的
+func (c *CounterSelect) Start() {
+	go func() {
+		for {
+			select {
+			case <-c.cntC:
+				c.Cnt = c.Cnt + 1
+				c.cntR <- c.Cnt
+			case <-c.stopC:
+				break
+			}
+		}
+	}()
+
+}
+
+func NewCounterSelect(cnt int) *CounterSelect {
+	c := &CounterSelect{
+		Cnt:   cnt,
+		cntC:  make(chan int),
+		cntR:  make(chan int),
+		stopC: make(chan int),
+	}
+	return c
+}
