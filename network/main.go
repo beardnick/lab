@@ -11,10 +11,10 @@ import (
 // NOTE: ping 192.168.1.1
 // will not find packet
 // because local route table redirect packet to lo
-// ip route show table local 
+// ip route show table local
 func main() {
 	dev := "mytun"
-	// tun running on the third level 
+	// tun running on the third level
 	// tap running on the second level
 	//net, err := tuntap.NewTap(dev)
 	net, err := tuntap.NewTun(dev)

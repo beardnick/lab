@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/gin-gonic/gin"
 	"io/ioutil"
 	"log"
 	"os"
+
+	"github.com/gin-gonic/gin"
 )
 
 func InitConfig() (err error) {
@@ -21,11 +22,11 @@ func InitConfig() (err error) {
 }
 
 func InitDb() (err error) {
-	db, err := OpenDb(Conf().Dsn)
+	db, err := OpenDb(Conf().Mysql)
 	if err != nil {
 		return
 	}
-	models := []interface{}{&Production{},&Order{}}
+	models := []interface{}{&Production{}, &Order{}}
 	for _, model := range models {
 		err = db.AutoMigrate(model)
 		if err != nil {

@@ -8,9 +8,14 @@ type RedisConf struct {
 	Db     int
 }
 
+type KafkaConfig struct {
+	Brokers []string
+}
+
 type Config struct {
-	Dsn   string
+	Mysql string
 	Redis RedisConf
+	Kafka KafkaConfig
 }
 
 var config Config

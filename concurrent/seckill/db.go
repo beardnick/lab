@@ -13,7 +13,7 @@ func OpenDb(dsn string) (db *gorm.DB, err error) {
 }
 
 func DefaultDB() (db *gorm.DB, err error) {
-	return OpenDb(Conf().Dsn)
+	return OpenDb(Conf().Mysql)
 }
 
 func OpenRedis(addr, passwd string, db int) (rdb *redis.Client, err error) {
