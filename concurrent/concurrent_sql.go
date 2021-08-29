@@ -28,6 +28,11 @@ func OpenDb(dsn string) (db *gorm.DB, err error) {
 	if err != nil {
 		return
 	}
+	sqlDb, err := db.DB()
+	if err != nil {
+		return
+	}
+	sqlDb.SetMaxOpenConns(100)
 	pool.Store(dsn, db)
 	return
 }
