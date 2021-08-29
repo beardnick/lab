@@ -2,7 +2,6 @@ package main
 
 import "gorm.io/gorm"
 
-
 type OrderDao struct {
 	db *gorm.DB
 }
@@ -13,7 +12,6 @@ func NewOrderDao() OrderDao {
 		db: db,
 	}
 }
-
 
 func (p OrderDao) GetOrder(id string) (cnt int, err error) {
 	order := Order{Guid: id}
