@@ -9,6 +9,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.3
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible
+	github.com/rs/xid v1.3.0
 	github.com/stretchr/testify v1.7.0
 	golang.org/x/net v0.0.0-20210505214959-0714010a04ed // indirect
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
