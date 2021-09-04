@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"sync"
 
+	"github.com/go-redis/redis/v8"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -37,8 +40,24 @@ func OpenDb(dsn string) (db *gorm.DB, err error) {
 	return
 }
 
-func InitProduct(p Product) (err error) {
-	db, err := OpenDb(os.Getenv("mysql_dsn"))
+type ProductProvider interface {
+	SetProduct(p Product) (err error)
+	OrderProduct(name string, n int) (err error)
+	ProductCnt(name string) (cnt int, err error)
+}
+
+type MysqlProduct struct {
+	Dsn string
+}
+
+func NewMysqlProduct() *MysqlProduct {
+	return &MysqlProduct{
+		Dsn: os.Getenv("mysql_dsn"),
+	}
+}
+
+func (m *MysqlProduct) SetProduct(p Product) (err error) {
+	db, err := OpenDb(m.Dsn)
 	if err != nil {
 		return
 	}
@@ -58,8 +77,8 @@ func InitProduct(p Product) (err error) {
 	return
 }
 
-func OrderProduct(name string, n int) (err error) {
-	db, err := OpenDb(os.Getenv("mysql_dsn"))
+func (m *MysqlProduct) OrderProduct(name string, n int) (err error) {
+	db, err := OpenDb(m.Dsn)
 	if err != nil {
 		return
 	}
@@ -71,12 +90,53 @@ func OrderProduct(name string, n int) (err error) {
 	return
 }
 
-func ProductCnt(name string) (cnt int, err error) {
-	db, err := OpenDb(os.Getenv("mysql_dsn"))
+func (m *MysqlProduct) ProductCnt(name string) (cnt int, err error) {
+	db, err := OpenDb(m.Dsn)
 	if err != nil {
 		return
 	}
 	p := Product{}
 	err = db.Take(&p, Product{Name: name}).Error
+	return
+}
+
+type RedisProduct struct {
+	Rdb *redis.Client
+}
+
+func NewRedisProduct() *RedisProduct {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("redis_url"),
+		Password: os.Getenv("redis_passwd"),
+	})
+	return &RedisProduct{
+		Rdb: rdb,
+	}
+}
+
+func (r *RedisProduct) SetProduct(p Product) (err error) {
+	_, err = r.Rdb.HSet(context.Background(), "products", p.Name, p.Cnt).Result()
+	return
+}
+
+// subGreater products iphone 10
+var subGreater = redis.NewScript(`
+if redis.call("hget",KEYS[1],ARGV[1]) >= ARGV[2] then
+    return redis.call("hincrby",KEYS[1],ARGV[1],ARGV[2])
+else
+	return 0
+end
+`)
+
+func (r *RedisProduct) OrderProduct(name string, n int) (err error) {
+	_, err = subGreater.Run(context.Background(), r.Rdb, []string{"products"}, name, -n).Result()
+	if err != nil {
+		fmt.Printf("err %v\n", err)
+	}
+	return
+}
+
+func (r *RedisProduct) ProductCnt(name string) (cnt int, err error) {
+	cnt, err = r.Rdb.HGet(context.Background(), "products", name).Int()
 	return
 }

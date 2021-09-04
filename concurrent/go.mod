@@ -6,10 +6,8 @@ require (
 	github.com/alicebob/miniredis/v2 v2.14.5
 	github.com/gin-gonic/gin v1.6.3
 	github.com/go-redis/redis/v7 v7.4.0
-	github.com/golang/protobuf v1.5.2 // indirect
+	github.com/go-redis/redis/v8 v8.11.3
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
-	github.com/onsi/ginkgo v1.15.0 // indirect
-	github.com/onsi/gomega v1.10.5 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/stretchr/testify v1.7.0
 	golang.org/x/net v0.0.0-20210505214959-0714010a04ed // indirect
