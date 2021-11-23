@@ -1,21 +1,16 @@
+// +build linux
+
 package main
 
 import (
+	"fmt"
+	"gotcp/tcp"
+	"gotcp/tuntap"
 	"log"
-	"network/tuntap"
-
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 )
 
-// NOTE: ping 192.168.1.1
-// will not find packet
-// because local route table redirect packet to lo
-// ip route show table local
 func main() {
 	dev := "mytun"
-	// tun running on the third level
-	// tap running on the second level
 	//net, err := tuntap.NewTap(dev)
 	net, err := tuntap.NewTun(dev)
 	if err != nil {
@@ -29,52 +24,32 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("net:", net)
+	conn, err := tcp.Accept(net)
+	if err != nil {
+		return
+	}
+	fmt.Println("conn:", conn)
 	for {
-		err = ParsePacket(net)
+		buf, err := tcp.Rcvd(conn)
+		if _, ok := err.(tcp.ConnectionClosedErr); ok {
+			break
+		}
 		if err != nil {
-			log.Println(err)
+			fmt.Println("read err:", err)
 			continue
 		}
+		fmt.Printf("read:'%s'\n", string(buf))
+		if len(buf) == 0 {
+			continue
+		}
+		_, err = tcp.Send(conn, buf)
+		if err != nil {
+			fmt.Println("send err:", err)
+		}
+		if string(buf) == "byte" {
+			break
+		}
 	}
-
-}
-
-func ParsePacket(fd int) (err error) {
-	buf := make([]byte, 1024)
-	n, err := tuntap.Read(fd, buf)
-	if err != nil {
-		log.Fatal(err)
-	}
-	pack := gopacket.NewPacket(
-		buf[:n],
-		layers.LayerTypeEthernet,
-		gopacket.Default,
-	)
-	return Parse(pack)
-}
-
-func Parse(packet gopacket.Packet) (err error) {
-	etherLayer := packet.Layer(layers.LayerTypeEthernet)
-	if etherLayer != nil {
-		ether, _ := etherLayer.(*layers.Ethernet)
-		log.Printf("type: %v %v -. %v\n", ether.EthernetType, ether.SrcMAC, ether.DstMAC)
-	}
-	ipLayer := packet.Layer(layers.LayerTypeIPv4)
-	if ipLayer != nil {
-		ip, _ := ipLayer.(*layers.IPv4)
-		log.Printf("ip: %v -> %v\n", ip.SrcIP, ip.DstIP)
-	}
-	tcpLayer := packet.Layer(layers.LayerTypeTCP)
-	if tcpLayer != nil {
-		tcp, _ := tcpLayer.(*layers.TCP)
-		log.Printf("tcp: %v -> %v\n", tcp.SrcPort, tcp.DstPort)
-		return
-	}
-	udpLayer := packet.Layer(layers.LayerTypeUDP)
-	if udpLayer != nil {
-		udp, _ := udpLayer.(*layers.UDP)
-		log.Printf("tcp: %v -> %v\n", udp.SrcPort, udp.DstPort)
-		return
-	}
-	return
+	fmt.Println("connection closed")
 }
