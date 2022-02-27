@@ -3,8 +3,9 @@ package tuntap
 import (
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
-import "github.com/stretchr/testify/assert"
 
 func TestNewTun(t *testing.T) {
 	assert := assert.New(t)

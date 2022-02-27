@@ -2,12 +2,13 @@ package tcp
 
 import (
 	"fmt"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"gotcp/tuntap"
 	"log"
 	"math/rand"
 	"net"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 type TcpState int
@@ -27,29 +28,19 @@ const (
 )
 
 func (s TcpState) String() string {
-	switch s {
-	case CLOSED:
-		return "CLOSED"
-	case LISTEN:
-		return "LISTEN"
-	case SYN_RCVD:
-		return "SYN_RCVD"
-	case SYN_SENT:
-		return "SYN_SENT"
-	case ESTAB:
-		return "ESTAB"
-	case FIN_WAIT_1:
-		return "FIN_WAIT_1"
-	case CLOSE_WAIT:
-		return "CLOSE_WAIT"
-	case CLOSING:
-		return "CLOSING"
-	case FINWAIT_2:
-	case TIME_WAIT:
-	case LAST_ACK:
-		return "LAST_ACK"
-	}
-	return "UNKNOWN"
+	return [...]string{
+		"CLOSED",
+		"LISTEN",
+		"SYN_RCVD",
+		"SYN_SENT",
+		"ESTAB",
+		"FIN_WAIT_1",
+		"CLOSE_WAIT",
+		"CLOSING",
+		"FINWAIT_2",
+		"TIME_WAIT",
+		"LAST_ACK",
+	}[s]
 }
 
 type Connection struct {
