@@ -1,38 +1,47 @@
-// +build linux
+//go:build linux
 
 package main
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"gotcp/tcp"
 	"gotcp/tuntap"
 	"log"
 )
 
+var name = flag.String("name", "tun0", "tuntap device name")
+var mode = flag.String("mode", "tun", "tuntap mode tun or tap")
+var ipCidr = flag.String("ip", "192.168.1.1/24", "tuntap ip cidr")
+
 func main() {
-	dev := "mytun"
-	//net, err := tuntap.NewTap(dev)
-	net, err := tuntap.NewTun(dev)
+	flag.Parse()
+	net, err := tuntap.NewTun(*name)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = tuntap.SetIp(dev, "192.168.1.1/24")
+	err = tuntap.SetIp(*name, *ipCidr)
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = tuntap.SetUpLink(dev)
+	err = tuntap.SetUpLink(*name)
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Println("net:", net)
-	conn, err := tcp.Accept(net)
+	nic := tcp.NewNic(net)
+	nic.Up()
+	sock := tcp.NewSocket(nic)
+	sock.Listen("192.168.1.1", 9090)
+	conn, err := sock.Accept()
 	if err != nil {
 		return
 	}
 	fmt.Println("conn:", conn)
 	for {
-		buf, err := tcp.Rcvd(conn)
-		if _, ok := err.(tcp.ConnectionClosedErr); ok {
+		buf, err := sock.Rcvd(conn)
+		if errors.Is(err, tcp.ConnectionClosedErr) {
 			break
 		}
 		if err != nil {

@@ -1,15 +1,32 @@
 package tcp
 
 import (
+	"errors"
 	"fmt"
 	"gotcp/tuntap"
 	"log"
 	"math/rand"
 	"net"
+	"sync"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
+
+type Socket struct {
+	Nic         *Nic
+	Host        string
+	Port        uint16
+	connections []*Connection
+	ReadC       chan Packet
+}
+
+func NewSocket(nic *Nic) Socket {
+	return Socket{
+		Nic:   nic,
+		ReadC: make(chan Packet),
+	}
+}
 
 type TcpState int
 
@@ -26,6 +43,81 @@ const (
 	TIME_WAIT
 	LAST_ACK
 )
+
+type Nic struct {
+	nic     int
+	sockets map[uint16]*Socket
+	sync.RWMutex
+}
+
+type Packet struct {
+	IpPack  *layers.IPv4
+	TcpPack *layers.TCP
+}
+
+func NewNic(nic int) *Nic {
+	return &Nic{
+		nic:     nic,
+		sockets: map[uint16]*Socket{},
+		RWMutex: sync.RWMutex{},
+	}
+}
+
+func (n *Nic) Up() {
+	go func() {
+		for {
+			pack, err := ReadPacket(n.nic)
+			if err != nil {
+				//log.Println(err)
+				continue
+			}
+			n.RLock()
+			s := n.sockets[uint16(pack.TcpPack.DstPort)]
+			n.RUnlock()
+			if s == nil {
+				// TODO:  22-10-30 //
+				log.Println("send connection refuse")
+				continue
+			}
+			go func() { s.ReadC <- pack }()
+		}
+	}()
+}
+
+func (n *Nic) RegisterListener(s *Socket) (err error) {
+	n.Lock()
+	defer n.Unlock()
+	oldSock := n.sockets[s.Port]
+	if oldSock != nil {
+		err = PortAlreadyInUsed
+		return
+	}
+	n.sockets[s.Port] = s
+	return
+}
+
+func (n *Nic) NewIpV4() layers.IPv4 {
+	return layers.IPv4{
+		BaseLayer: layers.BaseLayer{
+			Contents: []byte{},
+			Payload:  []byte{},
+		},
+		Version:    0,
+		IHL:        0,
+		TOS:        0,
+		Length:     0,
+		Id:         0,
+		Flags:      0,
+		FragOffset: 0,
+		TTL:        0,
+		Protocol:   0,
+		Checksum:   0,
+		SrcIP:      []byte{},
+		DstIP:      []byte{},
+		Options:    []layers.IPv4Option{},
+		Padding:    []byte{},
+	}
+}
 
 func (s TcpState) String() string {
 	return [...]string{
@@ -59,24 +151,23 @@ func (c Connection) Window() uint16 {
 	return uint16(len(c.window))
 }
 
-func New(ip *layers.IPv4, tcp *layers.TCP, nic, wind int) Connection {
+func NewConnection(pack Packet, wind int) Connection {
 	conn := Connection{
-		Nic:     nic,
 		State:   LISTEN,
-		SrcIp:   ip.DstIP,
-		DstIp:   ip.SrcIP,
-		SrcPort: tcp.DstPort,
-		DstPort: tcp.SrcPort,
+		SrcIp:   pack.IpPack.SrcIP,
+		DstIp:   pack.IpPack.DstIP,
+		SrcPort: pack.TcpPack.SrcPort,
+		DstPort: pack.TcpPack.DstPort,
 		window:  make([]byte, wind),
 	}
 	return conn
 }
 
-func (c Connection) IsTarget(ip *layers.IPv4, tcp *layers.TCP) bool {
-	return ip.DstIP.Equal(c.SrcIp) &&
-		ip.SrcIP.Equal(c.DstIp) &&
-		tcp.SrcPort == c.DstPort &&
-		tcp.DstPort == c.SrcPort
+func (c Connection) IsTarget(ipPack *layers.IPv4, tcpPack *layers.TCP) bool {
+	return ipPack.DstIP.Equal(c.SrcIp) &&
+		ipPack.SrcIP.Equal(c.DstIp) &&
+		tcpPack.SrcPort == c.DstPort &&
+		tcpPack.DstPort == c.SrcPort
 }
 
 func (c Connection) String() string {
@@ -91,7 +182,7 @@ func (c Connection) String() string {
 func Send(conn int, buf []byte) (n int, err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = ConnectionClosedErr{}
+			err = ConnectionClosedErr
 		}
 	}()
 	connection := connections[conn]
@@ -120,30 +211,29 @@ func Send(conn int, buf []byte) (n int, err error) {
 	return
 }
 
-func Rcvd(conn int) (buf []byte, err error) {
+func (s *Socket) Rcvd(conn int) (buf []byte, err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = ConnectionClosedErr{}
+			err = ConnectionClosedErr
 		}
 	}()
 	connection := connections[conn]
-	ip, tcp, err := ReadPacket(connection.Nic)
-	if _, ok := err.(NotValidTcpErr); !ok && err != nil {
+	pack, err := s.ReadPacket()
+	if errors.Is(err, NotValidTcpErr) {
+		err = nil
 		return
 	}
-	for !connection.IsTarget(ip, tcp) {
-		ip, tcp, err = ReadPacket(connection.Nic)
-		if _, ok := err.(NotValidTcpErr); !ok && err != nil {
-			return
-		}
-	}
-	if tcp.PSH {
-		buf = tcp.Payload
-		err = TcpPSHACK(ip, tcp, connection)
+	if err != nil {
 		return
 	}
-	if tcp.FIN {
-		err = TcpFIN(ip, tcp, connection)
+	tcpPack, ipPack := pack.TcpPack, pack.IpPack
+	if tcpPack.PSH {
+		buf = tcpPack.Payload
+		err = s.TcpPSHACK(ipPack, tcpPack, connection)
+		return
+	}
+	if tcpPack.FIN {
+		err = s.TcpFIN(ipPack, tcpPack, connection)
 		if err != nil {
 			return
 		}
@@ -151,10 +241,15 @@ func Rcvd(conn int) (buf []byte, err error) {
 	return
 }
 
-func TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection) (err error) {
+func (s *Socket) ReadPacket() (pack Packet, err error) {
+	pack = <-s.ReadC
+	return
+}
+
+func (s *Socket) TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = ConnectionClosedErr{}
+			err = ConnectionClosedErr
 		}
 	}()
 	ipLay := layers.IPv4{
@@ -174,22 +269,17 @@ func TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection) (err error
 		Ack:    tcp.Seq + 1,
 		Window: connection.Window(),
 	}
-	err = WritePacket(connection.Nic, &ipLay, &tcpLay)
+	err = s.WritePacket(&ipLay, &tcpLay)
 	if err != nil {
 		return
 	}
 	tcpLay.FIN = true
-	err = WritePacket(connection.Nic, &ipLay, &tcpLay)
-	ipData, tcpData, err := ReadPacket(connection.Nic)
+	err = s.WritePacket(&ipLay, &tcpLay)
+	pack, err := s.ReadPacket()
 	if err != nil {
 		return
 	}
-	for !connection.IsTarget(ipData, tcpData) {
-		ipData, tcpData, err = ReadPacket(connection.Nic)
-		if err != nil {
-			return
-		}
-	}
+	tcpData := pack.TcpPack
 	if tcpData.ACK && tcpData.Ack == tcpLay.Seq+1 {
 		fmt.Println("disconnect succeed")
 		connections = append(connections[:connection.Nic], connections[connection.Nic+1:]...)
@@ -197,7 +287,7 @@ func TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection) (err error
 	return
 }
 
-func TcpPSHACK(ip *layers.IPv4, tcp *layers.TCP, conn *Connection) (err error) {
+func (s *Socket) TcpPSHACK(ip *layers.IPv4, tcp *layers.TCP, conn *Connection) (err error) {
 
 	ipLay := *ip
 	ipLay.SrcIP = ip.DstIP
@@ -220,7 +310,7 @@ func TcpPSHACK(ip *layers.IPv4, tcp *layers.TCP, conn *Connection) (err error) {
 	// tcpdump calculate seq as relative seq
 	tcpLay.Seq = conn.Seq
 	conn.Nxt = tcpLay.Ack
-	return WritePacket(conn.Nic, &ipLay, &tcpLay)
+	return s.WritePacket(&ipLay, &tcpLay)
 }
 
 var (
@@ -231,61 +321,70 @@ func Close(conn int) (err error) {
 	return
 }
 
-func Accept(fd int) (conn int, err error) {
+func (s *Socket) Listen(host string, port uint16) {
+	s.Host = host
+	s.Port = port
+	s.Nic.RegisterListener(s)
+}
+
+func (s *Socket) Accept() (conn int, err error) {
 	var connection Connection
 	for {
-		//fmt.Println(connection)
-		ip, tcp, err := ReadPacket(fd)
+		var pack Packet
+		pack, err = s.ReadPacket()
 		if err != nil {
 			log.Println("err:", err)
 			continue
 		}
-		if connection.State != CLOSED {
-			if !connection.IsTarget(ip, tcp) {
-				log.Println("not target ip port")
+		switch connection.State {
+		case CLOSED:
+			if pack.TcpPack.SYN {
+				connection, err = s.SendSyn(pack)
+				if err != nil {
+					log.Println("err:", err)
+					continue
+				}
 				continue
 			}
-		}
-		if tcp.SYN {
-			connection, err = SendSyn(fd, ip, tcp)
-			if err != nil {
-				fmt.Println("err:", err)
-				continue
+		case SYN_RCVD:
+			if pack.TcpPack.ACK && connection.Nxt == pack.TcpPack.Ack {
+				connection.State = ESTAB
+				connection.Seq = 0
+				connections = append(connections, &connection)
+				conn = len(connections) - 1
+				fmt.Println("handshake succeed")
+				return
 			}
-			continue
-		}
-		if tcp.ACK && connection.State == SYN_RCVD && connection.Nxt == tcp.Ack {
-			connection.State = ESTAB
-			connection.Seq = 0
-			connections = append(connections, &connection)
-			conn = len(connections) - 1
-			fmt.Println("handshake succeed")
-			break
+		default:
+			log.Println("not expect packet, ignore")
 		}
 	}
-	return
 }
 
-func SendSyn(fd int, ip *layers.IPv4, tcp *layers.TCP) (conn Connection, err error) {
+func (s *Socket) SendSyn(pack Packet) (conn Connection, err error) {
 
-	conn = New(ip, tcp, fd, 1024)
+	conn = NewConnection(pack, 1024)
+	ipPack, tcpPack := pack.IpPack, pack.TcpPack
 
-	ipLay := *ip
-	ipLay.SrcIP = ip.DstIP
-	ipLay.DstIP = ip.SrcIP
+	ipLay := *ipPack
+	ipLay.SrcIP = conn.DstIp
+	ipLay.DstIP = conn.SrcIp
 
-	tcpLay := *tcp
-	tcpLay.SrcPort = tcp.DstPort
-	tcpLay.DstPort = tcp.SrcPort
+	tcpLay := *tcpPack
+
+	tcpLay.SrcPort = conn.DstPort
+	tcpLay.DstPort = conn.SrcPort
+
+	// <SEQ=random><ACK=lastSeq + 1><CTL=SYN,ACK>
+	tcpLay.Seq = uint32(rand.Int())
+	tcpLay.Ack = tcpPack.Seq + 1
 	tcpLay.SYN = true
 	tcpLay.ACK = true
-	tcpLay.Ack = tcp.Seq + 1
-	tcpLay.Seq = uint32(rand.Int())
-	tcpLay.Window = uint16(conn.Window())
 
+	tcpLay.Window = uint16(conn.Window())
 	conn.Nxt = tcpLay.Seq + 1
 
-	err = WritePacket(fd, &ipLay, &tcpLay)
+	err = s.WritePacket(&ipLay, &tcpLay)
 	if err != nil {
 		return
 	}
@@ -315,7 +414,7 @@ func WritePacketWithBuf(fd int, ip *layers.IPv4, tcp *layers.TCP, buf []byte) (e
 	return
 }
 
-func WritePacket(fd int, ip *layers.IPv4, tcp *layers.TCP) (err error) {
+func (s *Socket) WritePacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	// checksum needed
 	err = tcp.SetNetworkLayerForChecksum(ip)
 	if err != nil {
@@ -334,50 +433,58 @@ func WritePacket(fd int, ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	}
 	//fmt.Println("write:", buffer.Bytes())
 	// invalid argument if buffer is not valid ip packet
-	_, err = tuntap.Write(fd, buffer.Bytes())
+	_, err = tuntap.Write(s.Nic.nic, buffer.Bytes())
 	return
 }
 
-func ReadPacket(fd int) (ip *layers.IPv4, tcp *layers.TCP, err error) {
+func ReadPacket(fd int) (pack Packet, err error) {
 	buf := make([]byte, 1024)
 	n, err := tuntap.Read(fd, buf)
 	if err != nil {
 		log.Fatal(err)
 	}
-	pack := gopacket.NewPacket(
+	p := gopacket.NewPacket(
 		buf[:n],
 		layers.LayerTypeIPv4,
 		gopacket.Default,
 	)
-	return UnWrapTcp(pack)
+	return UnWrapTcp(p)
 }
 
-func UnWrapTcp(packet gopacket.Packet) (ip *layers.IPv4, tcp *layers.TCP, err error) {
+func UnWrapTcp(packet gopacket.Packet) (pack Packet, err error) {
 	ipLayer := packet.Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
-		err = ConnectionClosedErr{}
+		err = ConnectionClosedErr
 		return
 	}
-	ip, _ = ipLayer.(*layers.IPv4)
+	pack.IpPack, _ = ipLayer.(*layers.IPv4)
 	tcpLayer := packet.Layer(layers.LayerTypeTCP)
 	if tcpLayer == nil {
-		err = NotValidTcpErr{}
+		err = NotValidTcpErr
 		return
 	}
-	tcp, _ = tcpLayer.(*layers.TCP)
+	pack.TcpPack, _ = tcpLayer.(*layers.TCP)
 	return
 }
 
-type ConnectionClosedErr struct {
+type Err struct {
+	Code int
+	Msg  string
 }
 
-func (c ConnectionClosedErr) Error() string {
-	return "connection closed"
+func (e Err) Error() string {
+	return e.Msg
 }
 
-type NotValidTcpErr struct {
+func (e Err) Is(err error) bool {
+	if newErr, ok := err.(Err); ok {
+		return newErr.Code == e.Code
+	}
+	return false
 }
 
-func (e NotValidTcpErr) Error() string {
-	return "not valid tcp packet"
-}
+var (
+	ConnectionClosedErr = Err{Code: 1, Msg: "connection closed"}
+	NotValidTcpErr      = Err{Code: 2, Msg: "not valid tcp packet"}
+	PortAlreadyInUsed   = Err{Code: 3, Msg: "port already in used"}
+)
