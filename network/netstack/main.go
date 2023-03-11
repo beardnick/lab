@@ -52,7 +52,7 @@ func main() {
 		if len(buf) == 0 {
 			continue
 		}
-		_, err = tcp.Send(conn, buf)
+		_, err = sock.Send(conn, buf)
 		if err != nil {
 			fmt.Println("send err:", err)
 		}

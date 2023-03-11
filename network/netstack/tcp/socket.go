@@ -179,7 +179,7 @@ func (c Connection) String() string {
 		c.Nic)
 }
 
-func Send(conn int, buf []byte) (n int, err error) {
+func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = ConnectionClosedErr
@@ -190,16 +190,16 @@ func Send(conn int, buf []byte) (n int, err error) {
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolTCP,
-		SrcIP:    connection.SrcIp,
-		DstIP:    connection.DstIp,
+		SrcIP:    connection.DstIp,
+		DstIP:    connection.SrcIp,
 	}
 	//fmt.Println("send conn.seq:", connection.Seq)
 	tcpLay := layers.TCP{
 		BaseLayer: layers.BaseLayer{
 			Payload: buf,
 		},
-		SrcPort: connection.SrcPort,
-		DstPort: connection.DstPort,
+		SrcPort: connection.DstPort,
+		DstPort: connection.SrcPort,
 		Seq:     connection.Seq,
 		// note: PSH and ACK must send together
 		PSH:    true,
@@ -207,7 +207,7 @@ func Send(conn int, buf []byte) (n int, err error) {
 		Ack:    connection.Nxt,
 		Window: connection.Window(),
 	}
-	err = WritePacketWithBuf(connection.Nic, &ipLay, &tcpLay, buf)
+	err = s.WritePacketWithBuf(&ipLay, &tcpLay, buf)
 	return
 }
 
@@ -392,7 +392,7 @@ func (s *Socket) SendSyn(pack Packet) (conn Connection, err error) {
 	return
 }
 
-func WritePacketWithBuf(fd int, ip *layers.IPv4, tcp *layers.TCP, buf []byte) (err error) {
+func (s *Socket) WritePacketWithBuf(ip *layers.IPv4, tcp *layers.TCP, buf []byte) (err error) {
 	// checksum needed
 	err = tcp.SetNetworkLayerForChecksum(ip)
 	if err != nil {
@@ -410,7 +410,7 @@ func WritePacketWithBuf(fd int, ip *layers.IPv4, tcp *layers.TCP, buf []byte) (e
 	if err != nil {
 	}
 	// invalid argument if buffer is not valid ip packet
-	_, err = tuntap.Write(fd, buffer.Bytes())
+	_, err = tuntap.Write(s.Nic.nic, buffer.Bytes())
 	return
 }
 
