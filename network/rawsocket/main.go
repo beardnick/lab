@@ -61,7 +61,11 @@ func main() {
 		ip4header, _ := ipv4.ParseHeader(buf[:20])
 		tcpHeader := parseTcpHeaer(buf[20:40])
 		if tcpHeader.DestPort == 9090 {
-			fmt.Printf("%v:%v -> %v:%v\n", ip4header.Src, tcpHeader.SourcePort, ip4header.Dst, tcpHeader.DestPort)
+			fmt.Printf("len:%v DataOffset:%v\n", len(buf), tcpHeader.DataOffset)
+			fmt.Printf("ip header len %v ip total len %v tcp header len %v\n", ip4header.Len, ip4header.TotalLen, uint8(tcpHeader.DataOffset))
+			//fmt.Printf("%v:%v -> %v:%v %v\n", ip4header.Src, tcpHeader.SourcePort, ip4header.Dst, tcpHeader.DestPort)
+			payload := buf[ip4header.Len+int(tcpHeader.DataOffset) : ip4header.TotalLen]
+			fmt.Printf("%v:%v -> %v:%v %v\n", ip4header.Src, tcpHeader.SourcePort, ip4header.Dst, tcpHeader.DestPort, string(payload))
 		}
 	}
 }

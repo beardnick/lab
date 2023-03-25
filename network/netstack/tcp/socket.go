@@ -3,10 +3,10 @@ package tcp
 import (
 	"errors"
 	"fmt"
-	"gotcp/tuntap"
 	"log"
 	"math/rand"
 	"net"
+	"network/netstack/tuntap"
 	"sync"
 
 	"github.com/google/gopacket"

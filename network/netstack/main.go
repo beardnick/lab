@@ -6,9 +6,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"gotcp/tcp"
-	"gotcp/tuntap"
 	"log"
+	"network/netstack/tcp"
+	"network/netstack/tuntap"
 )
 
 var name = flag.String("name", "tun0", "tuntap device name")
