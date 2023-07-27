@@ -18,10 +18,13 @@ type Socket struct {
 	Host        string
 	Port        uint16
 	ReadC       chan tuntap.Packet
+	WindowSize  uint16
 }
 
 func NewSocket() Socket {
-	return Socket{}
+	return Socket{
+		WindowSize: 1024,
+	}
 }
 
 type TcpState int
@@ -57,30 +60,26 @@ func (s TcpState) String() string {
 }
 
 type Connection struct {
-	Nic     int
-	State   TcpState
-	SrcIp   net.IP
-	DstIp   net.IP
-	SrcPort layers.TCPPort
-	DstPort layers.TCPPort
-	Nxt     uint32
-	Seq     uint32
-	window  []byte
+	Nic      int
+	State    TcpState
+	SrcIp    net.IP
+	DstIp    net.IP
+	SrcPort  layers.TCPPort
+	DstPort  layers.TCPPort
+	Nxt      uint32
+	Seq      uint32
+	windSize uint16
+	window   []byte
 }
 
 func (c Connection) Window() uint16 {
-	// todo don't hard code
-	return 1024
+	return c.windSize
 }
 
-func NewConnection(pack tuntap.Packet, wind int) Connection {
+func NewConnection(wind uint16) Connection {
 	conn := Connection{
-		State:   LISTEN,
-		SrcIp:   pack.IpPack.SrcIP,
-		DstIp:   pack.IpPack.DstIP,
-		SrcPort: pack.TcpPack.SrcPort,
-		DstPort: pack.TcpPack.DstPort,
-		window:  make([]byte, 0, wind),
+		State:    LISTEN,
+		windSize: wind,
 	}
 	return conn
 }
@@ -173,7 +172,6 @@ func (s *Socket) TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection
 		SrcIP:    connection.SrcIp,
 		DstIP:    connection.DstIp,
 	}
-	//fmt.Println("send conn.seq:", connection.Seq)
 	tcpLay := layers.TCP{
 		SrcPort: connection.SrcPort,
 		DstPort: connection.DstPort,
@@ -249,7 +247,7 @@ func (s *Socket) Listen() {
 }
 
 func (s *Socket) Accept() (conn int, err error) {
-	var connection Connection
+	connection := NewConnection(s.WindowSize)
 	for {
 		var pack tuntap.Packet
 		pack, err = s.ReadPacket()
@@ -271,19 +269,18 @@ func (s *Socket) Accept() (conn int, err error) {
 
 func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (err error) {
 	switch connection.State {
-	case CLOSED:
+	case CLOSED, LISTEN:
 		if pack.TcpPack.SYN {
-			conn, e := s.SendSyn(pack)
-			if e != nil {
-				err = e
+			err = s.SendSyn(connection, pack)
+			if err != nil {
 				log.Println("err:", err)
 				return
 			}
-			*connection = conn
 		}
 	case SYN_RCVD:
 		if pack.TcpPack.ACK && connection.Nxt == pack.TcpPack.Ack {
 			connection.State = ESTAB
+			connection.window = make([]byte, 0, s.WindowSize)
 			connection.Seq = 0
 			s.connections = append(s.connections, connection)
 			fmt.Println("handshake succeed")
@@ -312,9 +309,13 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 	return
 }
 
-func (s *Socket) SendSyn(pack tuntap.Packet) (conn Connection, err error) {
+func (s *Socket) SendSyn(conn *Connection, pack tuntap.Packet) (err error) {
 
-	conn = NewConnection(pack, 1024)
+	conn.SrcIp = pack.IpPack.SrcIP
+	conn.DstIp = pack.IpPack.DstIP
+	conn.SrcPort = pack.TcpPack.SrcPort
+	conn.DstPort = pack.TcpPack.DstPort
+
 	ipPack, tcpPack := pack.IpPack, pack.TcpPack
 
 	ipLay := *ipPack
