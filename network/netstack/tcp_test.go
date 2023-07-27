@@ -4,10 +4,12 @@ package main
 
 import (
 	"github.com/stretchr/testify/assert"
+	"log"
 	"net"
 	"network/netstack/tcp"
 	"network/netstack/tuntap"
 	"testing"
+	"time"
 )
 
 //func TestStartup(t *testing.T) {
@@ -35,20 +37,24 @@ func TestTcp(t *testing.T) {
 	err = dev.StartUp("192.168.1.1/24")
 	assert.Nil(t, err)
 
+	time.Sleep(time.Second * 20)
 	s := tcp.NewSocket()
-	err = s.Bind("192.168.1.1", 8080)
+	err = s.Bind("192.168.1.2", 8080)
 	assert.Nil(t, err)
 	s.Listen()
 	go func() {
 		for {
-			clientConn, e := net.Dial("tcp", "192.168.1.1:8080")
+			clientConn, e := net.Dial("tcp", "192.168.1.2:8080")
 			if e != nil {
+				log.Println("dial err", e)
 				continue
 			}
 			_, e = clientConn.Write([]byte("hello world"))
 			if e != nil {
+				log.Println("dial write err", e)
 				continue
 			}
+			time.Sleep(time.Second)
 			clientConn.Close()
 			break
 		}
@@ -56,6 +62,7 @@ func TestTcp(t *testing.T) {
 	conn, err := s.Accept()
 	assert.Nil(t, err)
 	data, err := s.Rcvd(conn)
+	time.Sleep(10 * time.Second)
 	assert.Nil(t, err)
-	assert.Equal(t, string(data), "hello world")
+	assert.Equal(t, "hello world", string(data))
 }

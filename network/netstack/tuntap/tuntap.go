@@ -96,6 +96,7 @@ func (t *TunTap) StartUp(ipCidr string) (err error) {
 	if err != nil {
 		return
 	}
+	t.Up()
 	routeTable[ipCidr] = t
 	return
 }
@@ -117,6 +118,7 @@ func (t *TunTap) Up() {
 			t.portLock.Unlock()
 			select {
 			case portC <- pack:
+				log.Println("select read packet")
 			default:
 				log.Println("discard packet")
 			}
@@ -125,10 +127,10 @@ func (t *TunTap) Up() {
 }
 
 func (t *TunTap) ReadTcpPacket(port uint16) (pack Packet, err error) {
-	// #LAST
 	t.portLock.RLock()
-	pack = <-t.ports[port]
+	portC := t.ports[port]
 	t.portLock.RUnlock()
+	pack = <-portC
 	return
 }
 

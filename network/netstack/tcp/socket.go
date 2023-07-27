@@ -3,12 +3,13 @@ package tcp
 import (
 	"errors"
 	"fmt"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"log"
 	"math/rand"
 	"net"
 	"network/netstack/tuntap"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 type Socket struct {
