@@ -258,3 +258,39 @@ func Route(host string) (t *TunTap, err error) {
 	}
 	return
 }
+
+type MockNick struct {
+}
+
+func (m *MockNick) StartUp(ipCidr string) (err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockNick) Up() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockNick) ReadTcpPacket(port uint16) (pack Packet, err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockNick) Write(data []byte) (err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockNick) Bind(port uint16) {
+	//TODO implement me
+	panic("implement me")
+}
+
+type INicDevice interface {
+	StartUp(ipCidr string) (err error)
+	Up()
+	ReadTcpPacket(port uint16) (pack Packet, err error)
+	Write(data []byte) (err error)
+	Bind(port uint16)
+}

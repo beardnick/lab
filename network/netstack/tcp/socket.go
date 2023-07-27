@@ -14,11 +14,10 @@ import (
 
 type Socket struct {
 	connections []*Connection
-	//Nic         *Nic
-	Dev   *tuntap.TunTap
-	Host  string
-	Port  uint16
-	ReadC chan tuntap.Packet
+	Dev         tuntap.INicDevice
+	Host        string
+	Port        uint16
+	ReadC       chan tuntap.Packet
 }
 
 func NewSocket() Socket {
@@ -70,7 +69,8 @@ type Connection struct {
 }
 
 func (c Connection) Window() uint16 {
-	return uint16(len(c.window))
+	// todo don't hard code
+	return 1024
 }
 
 func NewConnection(pack tuntap.Packet, wind int) Connection {
@@ -80,7 +80,7 @@ func NewConnection(pack tuntap.Packet, wind int) Connection {
 		DstIp:   pack.IpPack.DstIP,
 		SrcPort: pack.TcpPack.SrcPort,
 		DstPort: pack.TcpPack.DstPort,
-		window:  make([]byte, wind),
+		window:  make([]byte, 0, wind),
 	}
 	return conn
 }
@@ -148,18 +148,11 @@ func (s *Socket) Rcvd(conn int) (buf []byte, err error) {
 	if err != nil {
 		return
 	}
-	tcpPack, ipPack := pack.TcpPack, pack.IpPack
-	if tcpPack.PSH {
-		buf = tcpPack.Payload
-		err = s.TcpPSHACK(ipPack, tcpPack, connection)
+	err = s.tcpStateMachine(connection, pack)
+	if err != nil {
 		return
 	}
-	if tcpPack.FIN {
-		err = s.TcpFIN(ipPack, tcpPack, connection)
-		if err != nil {
-			return
-		}
-	}
+	buf = connection.window
 	return
 }
 
@@ -264,29 +257,59 @@ func (s *Socket) Accept() (conn int, err error) {
 			log.Println("err:", err)
 			continue
 		}
-		switch connection.State {
-		case CLOSED:
-			if pack.TcpPack.SYN {
-				connection, err = s.SendSyn(pack)
-				if err != nil {
-					log.Println("err:", err)
-					continue
-				}
-				continue
-			}
-		case SYN_RCVD:
-			if pack.TcpPack.ACK && connection.Nxt == pack.TcpPack.Ack {
-				connection.State = ESTAB
-				connection.Seq = 0
-				s.connections = append(s.connections, &connection)
-				conn = len(s.connections) - 1
-				fmt.Println("handshake succeed")
-				return
-			}
-		default:
-			log.Println("not expect packet, ignore")
+		err = s.tcpStateMachine(&connection, pack)
+		if err != nil {
+			return
+		}
+		if connection.State == ESTAB {
+			conn = len(s.connections) - 1
+			break
 		}
 	}
+	return
+}
+
+func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (err error) {
+	switch connection.State {
+	case CLOSED:
+		if pack.TcpPack.SYN {
+			conn, e := s.SendSyn(pack)
+			if e != nil {
+				err = e
+				log.Println("err:", err)
+				return
+			}
+			*connection = conn
+		}
+	case SYN_RCVD:
+		if pack.TcpPack.ACK && connection.Nxt == pack.TcpPack.Ack {
+			connection.State = ESTAB
+			connection.Seq = 0
+			s.connections = append(s.connections, connection)
+			fmt.Println("handshake succeed")
+			return
+		}
+	case ESTAB:
+		if pack.TcpPack.PSH {
+			buf := pack.TcpPack.Payload
+			err = s.TcpPSHACK(pack.IpPack, pack.TcpPack, connection)
+			if err != nil {
+				return
+			}
+			// todo window full
+			connection.window = append(connection.window, buf...)
+			return
+		}
+		if pack.TcpPack.FIN {
+			err = s.TcpFIN(pack.IpPack, pack.TcpPack, connection)
+			if err != nil {
+				return
+			}
+		}
+	default:
+		log.Println("not expect packet, ignore")
+	}
+	return
 }
 
 func (s *Socket) SendSyn(pack tuntap.Packet) (conn Connection, err error) {
