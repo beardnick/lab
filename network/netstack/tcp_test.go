@@ -26,7 +26,7 @@ import (
 //			fmt.Printf("ip %s -> %s\n", p.IpPack.SrcIP, p.IpPack.DstIP)
 //		}
 //		if p.TcpPack != nil {
-//			fmt.Printf("tcp %s -> %s\n%s\n", p.TcpPack.SrcPort, p.TcpPack.DstPort, string(p.TcpPack.Payload))
+//			fmt.Printf("tcp %s -> %s\n%s\n", p.TcpPack.SelfPort, p.TcpPack.PeerPort, string(p.TcpPack.Payload))
 //		}
 //	}
 //}

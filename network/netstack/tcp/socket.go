@@ -1,12 +1,13 @@
 package tcp
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
 	"net"
 	"network/netstack/tuntap"
+	"sync"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -19,6 +20,10 @@ type Socket struct {
 	Port        uint16
 	ReadC       chan tuntap.Packet
 	WindowSize  uint16
+	portConn    map[layers.TCPPort]*Connection
+	AcceptQueue []*Connection
+	sockFds     []chan []byte // todo connection close后fd如何分配
+	sync.RWMutex
 }
 
 func NewSocket() Socket {
@@ -60,43 +65,46 @@ func (s TcpState) String() string {
 }
 
 type Connection struct {
+	Socket   *Socket
 	Nic      int
 	State    TcpState
-	SrcIp    net.IP
-	DstIp    net.IP
-	SrcPort  layers.TCPPort
-	DstPort  layers.TCPPort
-	Nxt      uint32
+	SelfIp   net.IP
+	PeerIp   net.IP
+	SelfPort layers.TCPPort
+	PeerPort layers.TCPPort
+	PeerNxt  uint32
+	SelfNxt  uint32
 	Seq      uint32
 	windSize uint16
 	window   []byte
+	sockFd   chan []byte
+	fd       int
 }
 
 func (c Connection) Window() uint16 {
 	return c.windSize
 }
 
-func NewConnection(wind uint16) Connection {
-	conn := Connection{
+func NewConnection(wind uint16) *Connection {
+	return &Connection{
 		State:    LISTEN,
 		windSize: wind,
 	}
-	return conn
 }
 
 func (c Connection) IsTarget(ipPack *layers.IPv4, tcpPack *layers.TCP) bool {
-	return ipPack.DstIP.Equal(c.SrcIp) &&
-		ipPack.SrcIP.Equal(c.DstIp) &&
-		tcpPack.SrcPort == c.DstPort &&
-		tcpPack.DstPort == c.SrcPort
+	return ipPack.DstIP.Equal(c.SelfIp) &&
+		ipPack.SrcIP.Equal(c.PeerIp) &&
+		tcpPack.SrcPort == c.PeerPort &&
+		tcpPack.DstPort == c.SelfPort
 }
 
 func (c Connection) String() string {
 	return fmt.Sprintf("%s:%s -> %s:%s state %s nxt %d nic %d",
-		c.SrcIp, c.SrcPort,
-		c.DstIp, c.DstPort,
+		c.SelfIp, c.SelfPort,
+		c.PeerIp, c.PeerPort,
 		c.State,
-		c.Nxt,
+		c.PeerNxt,
 		c.Nic)
 }
 
@@ -111,21 +119,21 @@ func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolTCP,
-		SrcIP:    connection.DstIp,
-		DstIP:    connection.SrcIp,
+		SrcIP:    connection.PeerIp,
+		DstIP:    connection.SelfIp,
 	}
 	//fmt.Println("send conn.seq:", connection.Seq)
 	tcpLay := layers.TCP{
 		BaseLayer: layers.BaseLayer{
 			Payload: buf,
 		},
-		SrcPort: connection.DstPort,
-		DstPort: connection.SrcPort,
+		SrcPort: connection.PeerPort,
+		DstPort: connection.SelfPort,
 		Seq:     connection.Seq,
 		// note: PSH and ACK must send together
 		PSH:    true,
 		ACK:    true,
-		Ack:    connection.Nxt,
+		Ack:    connection.PeerNxt,
 		Window: connection.Window(),
 	}
 	err = s.WritePacketWithBuf(&ipLay, &tcpLay, buf)
@@ -133,25 +141,9 @@ func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
 }
 
 func (s *Socket) Rcvd(conn int) (buf []byte, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = tuntap.ConnectionClosedErr
-		}
-	}()
-	connection := s.connections[conn]
-	pack, err := s.ReadPacket()
-	if errors.Is(err, tuntap.NotValidTcpErr) {
-		err = nil
-		return
-	}
-	if err != nil {
-		return
-	}
-	err = s.tcpStateMachine(connection, pack)
-	if err != nil {
-		return
-	}
-	buf = connection.window
+	s.RLock()
+	defer s.RUnlock()
+	buf = <-s.sockFds[conn]
 	return
 }
 
@@ -169,12 +161,12 @@ func (s *Socket) TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection
 		Version:  4,
 		TTL:      64,
 		Protocol: layers.IPProtocolTCP,
-		SrcIP:    connection.SrcIp,
-		DstIP:    connection.DstIp,
+		SrcIP:    connection.SelfIp,
+		DstIP:    connection.PeerIp,
 	}
 	tcpLay := layers.TCP{
-		SrcPort: connection.SrcPort,
-		DstPort: connection.DstPort,
+		SrcPort: connection.SelfPort,
+		DstPort: connection.PeerPort,
 		Seq:     tcp.Ack,
 		// note: PSH and ACK must send together
 		ACK:    true,
@@ -221,11 +213,56 @@ func (s *Socket) TcpPSHACK(ip *layers.IPv4, tcp *layers.TCP, conn *Connection) (
 	// note: seq is random, seq real value maybe not equal to tcpdump output value
 	// tcpdump calculate seq as relative seq
 	tcpLay.Seq = conn.Seq
-	conn.Nxt = tcpLay.Ack
+	conn.PeerNxt = tcpLay.Ack
 	return s.WritePacket(&ipLay, &tcpLay)
 }
 
-var ()
+func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
+	ipLay := layers.IPv4{
+		BaseLayer:  layers.BaseLayer{},      // todo
+		Version:    4,                       // ipv4
+		IHL:        0,                       // let gopacket compute this
+		TOS:        0,                       // type of service
+		Length:     0,                       // let gopacket compute this
+		Id:         0,                       // todo unique id
+		Flags:      layers.IPv4DontFragment, // do not fragment in ip layer, tcp layer will do better
+		FragOffset: 0,                       // let gopacket compute this
+		TTL:        64,                      // the default ttl is stored in /proc/sys/net/ipv4/ip_default_ttl
+		Protocol:   layers.IPProtocolTCP,    // protocol over ip layer
+		Checksum:   0,                       // let gopacket compute this
+		SrcIP:      c.SelfIp,                // self ip
+		DstIP:      c.PeerIp,                // dst ip
+		Options:    nil,                     // options, ignore now
+		Padding:    nil,                     // ignore now
+	}
+
+	c.PeerNxt = c.PeerNxt + uint32(len(tcp.Payload))
+
+	tcpLay := layers.TCP{
+		BaseLayer:  layers.BaseLayer{},
+		SrcPort:    c.SelfPort, //
+		DstPort:    c.PeerPort, //
+		Seq:        0,          //
+		Ack:        c.PeerNxt,  //
+		DataOffset: 0,
+		FIN:        false,
+		SYN:        false,
+		RST:        false,
+		PSH:        false,
+		ACK:        true,
+		URG:        false,
+		ECE:        false,
+		CWR:        false,
+		NS:         false,
+		Window:     uint16(c.Window()),
+		Checksum:   0, // let go packet caculate it
+		Urgent:     0,
+		Options:    nil,
+		Padding:    nil,
+	}
+
+	return c.Socket.WritePacket(&ipLay, &tcpLay)
+}
 
 func Close(conn int) (err error) {
 	return
@@ -244,27 +281,51 @@ func (s *Socket) Bind(host string, port uint16) (err error) {
 }
 
 func (s *Socket) Listen() {
+	go func() {
+		for {
+			pack, err := s.ReadPacket()
+			if err != nil {
+				log.Println("err:", err)
+				continue
+			}
+			connection := s.getConnection(pack)
+			if connection == nil {
+				connection = NewConnection(s.WindowSize)
+			}
+			err = s.tcpStateMachine(connection, pack)
+			if err != nil {
+				return
+			}
+			if connection.State == ESTAB {
+				s.Lock()
+				fd, sockFd := s.applyNewSockFd()
+				connection.fd = fd
+				connection.sockFd = sockFd
+				s.portConn[connection.PeerPort] = connection
+				s.AcceptQueue = append(s.AcceptQueue, connection)
+				s.Unlock()
+				break
+			}
+		}
+	}()
+	return
 }
 
 func (s *Socket) Accept() (conn int, err error) {
-	connection := NewConnection(s.WindowSize)
+	t := time.Tick(time.Millisecond)
 	for {
-		var pack tuntap.Packet
-		pack, err = s.ReadPacket()
-		if err != nil {
-			log.Println("err:", err)
-			continue
-		}
-		err = s.tcpStateMachine(&connection, pack)
-		if err != nil {
-			return
-		}
-		if connection.State == ESTAB {
-			conn = len(s.connections) - 1
-			break
+		select {
+		case <-t:
+			s.Lock()
+			if len(s.AcceptQueue) > 0 {
+				conn = s.AcceptQueue[0].fd
+				s.AcceptQueue = s.AcceptQueue[1:]
+				s.Unlock()
+				return
+			}
+			s.Unlock()
 		}
 	}
-	return
 }
 
 func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (err error) {
@@ -273,35 +334,37 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 		if pack.TcpPack.SYN {
 			err = s.SendSyn(connection, pack)
 			if err != nil {
-				log.Println("err:", err)
 				return
 			}
 		}
 	case SYN_RCVD:
-		if pack.TcpPack.ACK && connection.Nxt == pack.TcpPack.Ack {
+		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Ack {
 			connection.State = ESTAB
 			connection.window = make([]byte, 0, s.WindowSize)
 			connection.Seq = 0
 			s.connections = append(s.connections, connection)
-			fmt.Println("handshake succeed")
 			return
 		}
 	case ESTAB:
-		if pack.TcpPack.PSH {
-			buf := pack.TcpPack.Payload
-			err = s.TcpPSHACK(pack.IpPack, pack.TcpPack, connection)
-			if err != nil {
-				return
-			}
-			// todo window full
-			connection.window = append(connection.window, buf...)
-			return
-		}
 		if pack.TcpPack.FIN {
 			err = s.TcpFIN(pack.IpPack, pack.TcpPack, connection)
 			if err != nil {
 				return
 			}
+		}
+		err = connection.sendAck(pack.IpPack, pack.TcpPack)
+		if err != nil {
+			return
+		}
+		payload := pack.TcpPack.Payload
+		if len(payload) == 0 {
+			return
+		}
+		connection.window = append(connection.window, payload...)
+		// push data to application when PSH is set
+		if pack.TcpPack.PSH {
+			connection.sockFd <- connection.window
+			connection.window = make([]byte, 0, s.WindowSize)
 		}
 	default:
 		log.Println("not expect packet, ignore")
@@ -311,21 +374,21 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 
 func (s *Socket) SendSyn(conn *Connection, pack tuntap.Packet) (err error) {
 
-	conn.SrcIp = pack.IpPack.SrcIP
-	conn.DstIp = pack.IpPack.DstIP
-	conn.SrcPort = pack.TcpPack.SrcPort
-	conn.DstPort = pack.TcpPack.DstPort
+	conn.SelfIp = pack.IpPack.SrcIP
+	conn.PeerIp = pack.IpPack.DstIP
+	conn.SelfPort = pack.TcpPack.SrcPort
+	conn.PeerPort = pack.TcpPack.DstPort
 
 	ipPack, tcpPack := pack.IpPack, pack.TcpPack
 
 	ipLay := *ipPack
-	ipLay.SrcIP = conn.DstIp
-	ipLay.DstIP = conn.SrcIp
+	ipLay.SrcIP = conn.PeerIp
+	ipLay.DstIP = conn.SelfIp
 
 	tcpLay := *tcpPack
 
-	tcpLay.SrcPort = conn.DstPort
-	tcpLay.DstPort = conn.SrcPort
+	tcpLay.SrcPort = conn.PeerPort
+	tcpLay.DstPort = conn.SelfPort
 
 	// <SEQ=random><ACK=lastSeq + 1><CTL=SYN,ACK>
 	tcpLay.Seq = uint32(rand.Int())
@@ -334,7 +397,7 @@ func (s *Socket) SendSyn(conn *Connection, pack tuntap.Packet) (err error) {
 	tcpLay.ACK = true
 
 	tcpLay.Window = uint16(conn.Window())
-	conn.Nxt = tcpLay.Seq + 1
+	conn.PeerNxt = tcpLay.Seq + 1
 
 	err = s.WritePacket(&ipLay, &tcpLay)
 	if err != nil {
@@ -383,8 +446,18 @@ func (s *Socket) WritePacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	if err != nil {
 		return
 	}
-	//fmt.Println("write:", buffer.Bytes())
-	// invalid argument if buffer is not valid ip packet
 	err = s.Dev.Write(buffer.Bytes())
+	return
+}
+
+func (s *Socket) getConnection(pack tuntap.Packet) (connection *Connection) {
+	connection = s.portConn[pack.TcpPack.SrcPort]
+	return
+}
+
+func (s *Socket) applyNewSockFd() (fdId int, newFd chan []byte) {
+	newFd = make(chan []byte)
+	s.sockFds = append(s.sockFds, newFd)
+	fdId = len(s.sockFds) - 1
 	return
 }
