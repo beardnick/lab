@@ -21,6 +21,7 @@ type Socket struct {
 	ReadC       chan tuntap.Packet
 	WindowSize  uint16
 	portConn    map[layers.TCPPort]*Connection
+	SynQueue    map[layers.TCPPort]*Connection
 	AcceptQueue []*Connection
 	sockFds     []chan []byte // todo connection close后fd如何分配
 	sync.RWMutex
@@ -28,6 +29,8 @@ type Socket struct {
 
 func NewSocket() Socket {
 	return Socket{
+		portConn:   make(map[layers.TCPPort]*Connection),
+		SynQueue:   make(map[layers.TCPPort]*Connection),
 		WindowSize: 1024,
 	}
 }
@@ -85,10 +88,11 @@ func (c Connection) Window() uint16 {
 	return c.windSize
 }
 
-func NewConnection(wind uint16) *Connection {
+func NewConnection(socket *Socket, wind uint16) *Connection {
 	return &Connection{
 		State:    LISTEN,
 		windSize: wind,
+		Socket:   socket,
 	}
 }
 
@@ -289,22 +293,10 @@ func (s *Socket) Listen() {
 				continue
 			}
 			connection := s.getConnection(pack)
-			if connection == nil {
-				connection = NewConnection(s.WindowSize)
-			}
 			err = s.tcpStateMachine(connection, pack)
 			if err != nil {
-				return
-			}
-			if connection.State == ESTAB {
-				s.Lock()
-				fd, sockFd := s.applyNewSockFd()
-				connection.fd = fd
-				connection.sockFd = sockFd
-				s.portConn[connection.PeerPort] = connection
-				s.AcceptQueue = append(s.AcceptQueue, connection)
-				s.Unlock()
-				break
+				log.Println("err:", err)
+				continue
 			}
 		}
 	}()
@@ -336,13 +328,22 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			if err != nil {
 				return
 			}
+			s.SynQueue[pack.TcpPack.SrcPort] = connection
 		}
 	case SYN_RCVD:
 		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Ack {
+			s.Lock()
 			connection.State = ESTAB
 			connection.window = make([]byte, 0, s.WindowSize)
 			connection.Seq = 0
 			s.connections = append(s.connections, connection)
+			fd, sockFd := s.applyNewSockFd()
+			connection.fd = fd
+			connection.sockFd = sockFd
+			s.portConn[connection.PeerPort] = connection
+			s.AcceptQueue = append(s.AcceptQueue, connection)
+			s.Unlock()
+			log.Println("connection estab")
 			return
 		}
 	case ESTAB:
@@ -351,6 +352,7 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			if err != nil {
 				return
 			}
+			return
 		}
 		err = connection.sendAck(pack.IpPack, pack.TcpPack)
 		if err != nil {
@@ -451,7 +453,16 @@ func (s *Socket) WritePacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 }
 
 func (s *Socket) getConnection(pack tuntap.Packet) (connection *Connection) {
-	connection = s.portConn[pack.TcpPack.SrcPort]
+	ok := false
+	connection, ok = s.portConn[pack.TcpPack.SrcPort]
+	if ok {
+		return
+	}
+	connection, ok = s.SynQueue[pack.TcpPack.SrcPort]
+	if ok {
+		return
+	}
+	connection = NewConnection(s, s.WindowSize)
 	return
 }
 
