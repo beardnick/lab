@@ -118,9 +118,6 @@ func (t *TunTap) Up() {
 			t.portLock.Unlock()
 			select {
 			case portC <- pack:
-				log.Println("select read packet")
-			default:
-				log.Println("discard packet")
 			}
 		}
 	}()

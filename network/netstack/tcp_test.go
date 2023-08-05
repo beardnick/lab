@@ -61,7 +61,6 @@ func TestTcp(t *testing.T) {
 	conn, err := s.Accept()
 	assert.Nil(t, err)
 	data, err := s.Rcvd(conn)
-	time.Sleep(10 * time.Second)
 	assert.Nil(t, err)
 	assert.Equal(t, "hello world", string(data))
 }

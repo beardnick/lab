@@ -4,8 +4,14 @@ go 1.18
 
 require (
 	github.com/google/gopacket v1.1.19
+	github.com/rs/zerolog v1.30.0
 	github.com/stretchr/testify v1.8.2
 	golang.org/x/net v0.8.0
+)
+
+require (
+	github.com/mattn/go-colorable v0.1.12 // indirect
+	github.com/mattn/go-isatty v0.0.14 // indirect
 )
 
 require (

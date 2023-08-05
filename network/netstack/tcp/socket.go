@@ -1,8 +1,6 @@
 package tcp
 
 import (
-	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"network/netstack/tuntap"
@@ -11,6 +9,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"network/infra"
 )
 
 type Socket struct {
@@ -77,7 +76,6 @@ type Connection struct {
 	PeerPort layers.TCPPort
 	PeerNxt  uint32
 	SelfNxt  uint32
-	Seq      uint32
 	windSize uint16
 	window   []byte
 	sockFd   chan []byte
@@ -103,46 +101,37 @@ func (c Connection) IsTarget(ipPack *layers.IPv4, tcpPack *layers.TCP) bool {
 		tcpPack.DstPort == c.SelfPort
 }
 
-func (c Connection) String() string {
-	return fmt.Sprintf("%s:%s -> %s:%s state %s nxt %d nic %d",
-		c.SelfIp, c.SelfPort,
-		c.PeerIp, c.PeerPort,
-		c.State,
-		c.PeerNxt,
-		c.Nic)
-}
-
-func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = tuntap.ConnectionClosedErr
-		}
-	}()
-	connection := s.connections[conn]
-	ipLay := layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		Protocol: layers.IPProtocolTCP,
-		SrcIP:    connection.PeerIp,
-		DstIP:    connection.SelfIp,
-	}
-	//fmt.Println("send conn.seq:", connection.Seq)
-	tcpLay := layers.TCP{
-		BaseLayer: layers.BaseLayer{
-			Payload: buf,
-		},
-		SrcPort: connection.PeerPort,
-		DstPort: connection.SelfPort,
-		Seq:     connection.Seq,
-		// note: PSH and ACK must send together
-		PSH:    true,
-		ACK:    true,
-		Ack:    connection.PeerNxt,
-		Window: connection.Window(),
-	}
-	err = s.WritePacketWithBuf(&ipLay, &tcpLay, buf)
-	return
-}
+//func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
+//	defer func() {
+//		if e := recover(); e != nil {
+//			err = tuntap.ConnectionClosedErr
+//		}
+//	}()
+//	connection := s.connections[conn]
+//	ipLay := layers.IPv4{
+//		Version:  4,
+//		TTL:      64,
+//		Protocol: layers.IPProtocolTCP,
+//		SrcIP:    connection.PeerIp,
+//		DstIP:    connection.SelfIp,
+//	}
+//	//fmt.Println("send conn.seq:", connection.Seq)
+//	tcpLay := layers.TCP{
+//		BaseLayer: layers.BaseLayer{
+//			Payload: buf,
+//		},
+//		SrcPort: connection.PeerPort,
+//		DstPort: connection.SelfPort,
+//		Seq:     connection.Seq,
+//		// note: PSH and ACK must send together
+//		PSH:    true,
+//		ACK:    true,
+//		Ack:    connection.PeerNxt,
+//		Window: connection.Window(),
+//	}
+//	err = s.WritePacketWithBuf(&ipLay, &tcpLay, buf)
+//	return
+//}
 
 func (s *Socket) Rcvd(conn int) (buf []byte, err error) {
 	s.RLock()
@@ -152,73 +141,66 @@ func (s *Socket) Rcvd(conn int) (buf []byte, err error) {
 }
 
 func (s *Socket) ReadPacket() (pack tuntap.Packet, err error) {
-	return s.Dev.ReadTcpPacket(s.Port)
-}
-
-func (s *Socket) TcpFIN(ip *layers.IPv4, tcp *layers.TCP, connection *Connection) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = tuntap.ConnectionClosedErr
-		}
-	}()
-	ipLay := layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		Protocol: layers.IPProtocolTCP,
-		SrcIP:    connection.SelfIp,
-		DstIP:    connection.PeerIp,
-	}
-	tcpLay := layers.TCP{
-		SrcPort: connection.SelfPort,
-		DstPort: connection.PeerPort,
-		Seq:     tcp.Ack,
-		// note: PSH and ACK must send together
-		ACK:    true,
-		Ack:    tcp.Seq + 1,
-		Window: connection.Window(),
-	}
-	err = s.WritePacket(&ipLay, &tcpLay)
+	pack, err = s.Dev.ReadTcpPacket(s.Port)
 	if err != nil {
 		return
 	}
-	tcpLay.FIN = true
-	err = s.WritePacket(&ipLay, &tcpLay)
-	pack, err := s.ReadPacket()
-	if err != nil {
-		return
-	}
-	tcpData := pack.TcpPack
-	if tcpData.ACK && tcpData.Ack == tcpLay.Seq+1 {
-		fmt.Println("disconnect succeed")
-		s.connections = append(s.connections[:connection.Nic], s.connections[connection.Nic+1:]...)
-	}
+	ip, tcp := pack.IpPack, pack.TcpPack
+	infra.Logger.Debug().Msgf("read packet %s:%s -> %s:%s syn:%v ack:%v fin:%v psh:%v seq:%v ack:%v",
+		ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort, tcp.SYN, tcp.ACK, tcp.FIN, tcp.PSH, tcp.Seq, tcp.Ack)
 	return
 }
 
-func (s *Socket) TcpPSHACK(ip *layers.IPv4, tcp *layers.TCP, conn *Connection) (err error) {
-
-	ipLay := *ip
-	ipLay.SrcIP = ip.DstIP
-	ipLay.DstIP = ip.SrcIP
-
-	tcpLay := *tcp
-	tcpLay.SrcPort = tcp.DstPort
-	tcpLay.DstPort = tcp.SrcPort
-	tcpLay.PSH = false
-	tcpLay.ACK = true
-	tcpLay.Ack = tcp.Seq + uint32(len(tcp.Payload))
-	tcpLay.Window = uint16(conn.Window())
-	tcpLay.Payload = []byte{}
-	// PSH + ACK
-	if tcp.ACK {
-		// note: tcp.Ack is what client expect seq next
-		conn.Seq = tcp.Ack
+func (c *Connection) tcpFIN(ip *layers.IPv4, tcp *layers.TCP) (err error) {
+	ipLay := layers.IPv4{
+		BaseLayer:  layers.BaseLayer{},      // todo
+		Version:    4,                       // ipv4
+		IHL:        0,                       // let gopacket compute this
+		TOS:        0,                       // type of service
+		Length:     0,                       // let gopacket compute this
+		Id:         0,                       // todo unique id
+		Flags:      layers.IPv4DontFragment, // do not fragment in ip layer, tcp layer will do better
+		FragOffset: 0,                       // let gopacket compute this
+		TTL:        64,                      // the default ttl is stored in /proc/sys/net/ipv4/ip_default_ttl
+		Protocol:   layers.IPProtocolTCP,    // protocol over ip layer
+		Checksum:   0,                       // let gopacket compute this
+		SrcIP:      c.SelfIp,                // self ip
+		DstIP:      c.PeerIp,                // dst ip
+		Options:    nil,                     // options, ignore now
+		Padding:    nil,                     // ignore now
 	}
-	// note: seq is random, seq real value maybe not equal to tcpdump output value
-	// tcpdump calculate seq as relative seq
-	tcpLay.Seq = conn.Seq
-	conn.PeerNxt = tcpLay.Ack
-	return s.WritePacket(&ipLay, &tcpLay)
+
+	c.caculatePeerNext(ip, tcp)
+	c.caculateSelfNext(ip, tcp)
+
+	tcpLay := layers.TCP{
+		BaseLayer:  layers.BaseLayer{},
+		SrcPort:    c.SelfPort, //
+		DstPort:    c.PeerPort, //
+		Seq:        c.SelfNxt,
+		Ack:        c.PeerNxt, //
+		DataOffset: 0,
+		FIN:        true,
+		SYN:        false,
+		RST:        false,
+		PSH:        false,
+		ACK:        true,
+		URG:        false,
+		ECE:        false,
+		CWR:        false,
+		NS:         false,
+		Window:     uint16(c.Window()),
+		Checksum:   0, // let go packet caculate it
+		Urgent:     0,
+		Options:    nil,
+		Padding:    nil,
+	}
+
+	err = c.Socket.WritePacket(&ipLay, &tcpLay)
+	if err != nil {
+		return
+	}
+	return
 }
 
 func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
@@ -240,13 +222,14 @@ func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 		Padding:    nil,                     // ignore now
 	}
 
-	c.PeerNxt = c.PeerNxt + uint32(len(tcp.Payload))
+	c.caculateSelfNext(ip, tcp)
+	c.caculatePeerNext(ip, tcp)
 
 	tcpLay := layers.TCP{
 		BaseLayer:  layers.BaseLayer{},
 		SrcPort:    c.SelfPort, //
 		DstPort:    c.PeerPort, //
-		Seq:        0,          //
+		Seq:        c.SelfNxt,  //
 		Ack:        c.PeerNxt,  //
 		DataOffset: 0,
 		FIN:        false,
@@ -266,6 +249,28 @@ func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	}
 
 	return c.Socket.WritePacket(&ipLay, &tcpLay)
+}
+
+func (c *Connection) caculatePeerNext(ip *layers.IPv4, tcp *layers.TCP) {
+	if tcp.SYN || tcp.FIN {
+		c.PeerNxt = tcp.Seq + 1
+		return
+	}
+	if len(tcp.Payload) > 0 {
+		c.PeerNxt = c.PeerNxt + uint32(len(tcp.Payload))
+	}
+}
+
+func (c *Connection) caculateSelfNext(ip *layers.IPv4, tcp *layers.TCP) {
+	if tcp.SYN {
+		c.SelfNxt = uint32(rand.Int())
+		return
+	}
+	if tcp.ACK {
+		// todo verify this ack
+		c.SelfNxt = tcp.Ack
+		return
+	}
 }
 
 func Close(conn int) (err error) {
@@ -289,13 +294,13 @@ func (s *Socket) Listen() {
 		for {
 			pack, err := s.ReadPacket()
 			if err != nil {
-				log.Println("err:", err)
+				infra.Logger.Error().AnErr("read packet", err)
 				continue
 			}
 			connection := s.getConnection(pack)
 			err = s.tcpStateMachine(connection, pack)
 			if err != nil {
-				log.Println("err:", err)
+				infra.Logger.Error().AnErr("handle packet", err)
 				continue
 			}
 		}
@@ -321,21 +326,21 @@ func (s *Socket) Accept() (conn int, err error) {
 }
 
 func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (err error) {
+	// todo 校验重复包
 	switch connection.State {
 	case CLOSED, LISTEN:
 		if pack.TcpPack.SYN {
-			err = s.SendSyn(connection, pack)
+			err = s.sendSyn(connection, pack)
 			if err != nil {
 				return
 			}
 			s.SynQueue[pack.TcpPack.SrcPort] = connection
 		}
 	case SYN_RCVD:
-		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Ack {
+		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Seq {
 			s.Lock()
 			connection.State = ESTAB
 			connection.window = make([]byte, 0, s.WindowSize)
-			connection.Seq = 0
 			s.connections = append(s.connections, connection)
 			fd, sockFd := s.applyNewSockFd()
 			connection.fd = fd
@@ -343,12 +348,11 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			s.portConn[connection.PeerPort] = connection
 			s.AcceptQueue = append(s.AcceptQueue, connection)
 			s.Unlock()
-			log.Println("connection estab")
 			return
 		}
 	case ESTAB:
 		if pack.TcpPack.FIN {
-			err = s.TcpFIN(pack.IpPack, pack.TcpPack, connection)
+			err = connection.tcpFIN(pack.IpPack, pack.TcpPack)
 			if err != nil {
 				return
 			}
@@ -369,37 +373,61 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			connection.window = make([]byte, 0, s.WindowSize)
 		}
 	default:
-		log.Println("not expect packet, ignore")
+		infra.Logger.Debug().Msg("not expect packet, ignore")
 	}
 	return
 }
 
-func (s *Socket) SendSyn(conn *Connection, pack tuntap.Packet) (err error) {
+func (s *Socket) sendSyn(conn *Connection, pack tuntap.Packet) (err error) {
 
-	conn.SelfIp = pack.IpPack.SrcIP
-	conn.PeerIp = pack.IpPack.DstIP
-	conn.SelfPort = pack.TcpPack.SrcPort
-	conn.PeerPort = pack.TcpPack.DstPort
+	conn.SelfIp = pack.IpPack.DstIP
+	conn.PeerIp = pack.IpPack.SrcIP
+	conn.SelfPort = pack.TcpPack.DstPort
+	conn.PeerPort = pack.TcpPack.SrcPort
 
-	ipPack, tcpPack := pack.IpPack, pack.TcpPack
+	conn.caculatePeerNext(pack.IpPack, pack.TcpPack)
+	conn.caculateSelfNext(pack.IpPack, pack.TcpPack)
 
-	ipLay := *ipPack
-	ipLay.SrcIP = conn.PeerIp
-	ipLay.DstIP = conn.SelfIp
+	ipLay := layers.IPv4{
+		BaseLayer:  layers.BaseLayer{},      // todo
+		Version:    4,                       // ipv4
+		IHL:        0,                       // let gopacket compute this
+		TOS:        0,                       // type of service
+		Length:     0,                       // let gopacket compute this
+		Id:         0,                       // todo unique id
+		Flags:      layers.IPv4DontFragment, // do not fragment in ip layer, tcp layer will do better
+		FragOffset: 0,                       // let gopacket compute this
+		TTL:        64,                      // the default ttl is stored in /proc/sys/net/ipv4/ip_default_ttl
+		Protocol:   layers.IPProtocolTCP,    // protocol over ip layer
+		Checksum:   0,                       // let gopacket compute this
+		SrcIP:      conn.SelfIp,             // self ip
+		DstIP:      conn.PeerIp,             // dst ip
+		Options:    nil,                     // options, ignore now
+		Padding:    nil,                     // ignore now
+	}
 
-	tcpLay := *tcpPack
-
-	tcpLay.SrcPort = conn.PeerPort
-	tcpLay.DstPort = conn.SelfPort
-
-	// <SEQ=random><ACK=lastSeq + 1><CTL=SYN,ACK>
-	tcpLay.Seq = uint32(rand.Int())
-	tcpLay.Ack = tcpPack.Seq + 1
-	tcpLay.SYN = true
-	tcpLay.ACK = true
-
-	tcpLay.Window = uint16(conn.Window())
-	conn.PeerNxt = tcpLay.Seq + 1
+	tcpLay := layers.TCP{
+		BaseLayer:  layers.BaseLayer{},
+		SrcPort:    conn.SelfPort, //
+		DstPort:    conn.PeerPort, //
+		Seq:        conn.SelfNxt,  //
+		Ack:        conn.PeerNxt,  //
+		DataOffset: 0,
+		FIN:        false,
+		SYN:        true,
+		RST:        false,
+		PSH:        false,
+		ACK:        true,
+		URG:        false,
+		ECE:        false,
+		CWR:        false,
+		NS:         false,
+		Window:     uint16(conn.Window()),
+		Checksum:   0, // let go packet caculate it
+		Urgent:     0,
+		Options:    nil,
+		Padding:    nil,
+	}
 
 	err = s.WritePacket(&ipLay, &tcpLay)
 	if err != nil {
@@ -432,6 +460,8 @@ func (s *Socket) WritePacketWithBuf(ip *layers.IPv4, tcp *layers.TCP, buf []byte
 }
 
 func (s *Socket) WritePacket(ip *layers.IPv4, tcp *layers.TCP) (err error) {
+	infra.Logger.Debug().Msgf("write packet %s:%s -> %s:%s syn:%v ack:%v fin:%v psh:%v seq:%v ack:%v",
+		ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort, tcp.SYN, tcp.ACK, tcp.FIN, tcp.PSH, tcp.Seq, tcp.Ack)
 	// checksum needed
 	err = tcp.SetNetworkLayerForChecksum(ip)
 	if err != nil {
