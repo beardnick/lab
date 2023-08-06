@@ -3,33 +3,15 @@
 package main
 
 import (
+	"bufio"
 	"github.com/stretchr/testify/assert"
 	"log"
 	"net"
 	"network/netstack/tcp"
 	"network/netstack/tuntap"
+	"sync"
 	"testing"
-	"time"
 )
-
-//func TestStartup(t *testing.T) {
-//	dev, err := tuntap.NewTun("mytun")
-//	assert.Nil(t, err)
-//	err = dev.StartUp("192.168.1.1/24")
-//	assert.Nil(t, err)
-//	for {
-//		fmt.Println("read next")
-//		p, err := dev.ReadTcpPacket()
-//		assert.Nil(t, err)
-//		fmt.Println("read packet")
-//		if p.IpPack != nil {
-//			fmt.Printf("ip %s -> %s\n", p.IpPack.SrcIP, p.IpPack.DstIP)
-//		}
-//		if p.TcpPack != nil {
-//			fmt.Printf("tcp %s -> %s\n%s\n", p.TcpPack.SelfPort, p.TcpPack.PeerPort, string(p.TcpPack.Payload))
-//		}
-//	}
-//}
 
 func TestTcp(t *testing.T) {
 	dev, err := tuntap.NewTun("mytun")
@@ -41,26 +23,45 @@ func TestTcp(t *testing.T) {
 	err = s.Bind("192.168.1.2", 8080)
 	assert.Nil(t, err)
 	s.Listen()
+
+	wg := sync.WaitGroup{}
+	wg.Add(2)
 	go func() {
+		var (
+			clientConn net.Conn
+			e          error
+		)
 		for {
-			clientConn, e := net.Dial("tcp", "192.168.1.2:8080")
+			clientConn, e = net.Dial("tcp", "192.168.1.2:8080")
 			if e != nil {
 				log.Println("dial err", e)
 				continue
 			}
-			_, e = clientConn.Write([]byte("hello world"))
-			if e != nil {
-				log.Println("dial write err", e)
-				continue
-			}
-			time.Sleep(time.Second)
-			clientConn.Close()
 			break
 		}
+		_, e = clientConn.Write([]byte("hello world"))
+		assert.Nil(t, e)
+
+		// use Read will return an empty string immediately
+		r := bufio.NewReader(clientConn)
+		assert.Nil(t, e)
+		str, e := r.ReadString('\n')
+		assert.Nil(t, e)
+		assert.Equal(t, "nihao\n", str)
+
+		clientConn.Close()
+		//_, e = clientConn.Read(buf)
+		//assert.Equal(t, io.EOF, e)
+		wg.Done()
 	}()
-	conn, err := s.Accept()
-	assert.Nil(t, err)
-	data, err := s.Rcvd(conn)
-	assert.Nil(t, err)
-	assert.Equal(t, "hello world", string(data))
+	go func() {
+		conn, err := s.Accept()
+		assert.Nil(t, err)
+		data, err := s.Rcvd(conn)
+		assert.Nil(t, err)
+		assert.Equal(t, "hello world", string(data))
+		s.Send(conn, []byte("nihao\n"))
+		wg.Done()
+	}()
+	wg.Wait()
 }
