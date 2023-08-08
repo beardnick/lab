@@ -5,12 +5,14 @@ package main
 import (
 	"bufio"
 	"github.com/stretchr/testify/assert"
+	"io"
 	"log"
 	"net"
 	"network/netstack/tcp"
 	"network/netstack/tuntap"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestTcp(t *testing.T) {
@@ -49,9 +51,12 @@ func TestTcp(t *testing.T) {
 		assert.Nil(t, e)
 		assert.Equal(t, "nihao\n", str)
 
-		clientConn.Close()
+		//clientConn.Close()
 		//_, e = clientConn.Read(buf)
 		//assert.Equal(t, io.EOF, e)
+		time.Sleep(time.Second)
+		_, e = r.ReadString('\n')
+		assert.Equal(t, io.EOF, e)
 		wg.Done()
 	}()
 	go func() {
@@ -61,6 +66,7 @@ func TestTcp(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, "hello world", string(data))
 		s.Send(conn, []byte("nihao\n"))
+		s.Close(conn)
 		wg.Done()
 	}()
 	wg.Wait()

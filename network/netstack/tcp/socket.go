@@ -7,22 +7,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
+
+	"network/infra"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"network/infra"
 )
 
 type Socket struct {
-	connections []*Connection
 	Dev         tuntap.INicDevice
 	Host        string
 	Port        uint16
-	ReadC       chan tuntap.Packet
 	WindowSize  uint16
 	portConn    map[layers.TCPPort]*Connection
 	SynQueue    map[layers.TCPPort]*Connection
 	AcceptQueue []*Connection
-	sockFds     []Stream
+	sockFds     map[int]Stream
+	fdLimit     int
 	sync.RWMutex
 }
 
@@ -31,6 +33,8 @@ func NewSocket() Socket {
 		portConn:   make(map[layers.TCPPort]*Connection),
 		SynQueue:   make(map[layers.TCPPort]*Connection),
 		WindowSize: 1024,
+		fdLimit:    1024,
+		sockFds:    make(map[int]Stream),
 	}
 }
 
@@ -68,7 +72,6 @@ func (s TcpState) String() string {
 
 type Connection struct {
 	Socket   *Socket
-	Nic      int
 	State    TcpState
 	SelfIp   net.IP
 	PeerIp   net.IP
@@ -77,20 +80,25 @@ type Connection struct {
 	PeerNxt  uint32
 	SelfNxt  uint32
 	windSize uint16
-	window   []byte
+	recvWin  []byte
+	sendWin  []byte
+	sendPtr  int
+	recvPtr  int
 	sockFd   Stream
 	fd       int
 }
 
 type Stream struct {
-	In  chan []byte
-	Out chan []byte
+	In    chan []byte
+	Out   chan []byte
+	Close chan struct{}
 }
 
 func NewStream() Stream {
 	return Stream{
-		In:  make(chan []byte),
-		Out: make(chan []byte),
+		In:    make(chan []byte),
+		Out:   make(chan []byte),
+		Close: make(chan struct{}),
 	}
 }
 
@@ -113,6 +121,7 @@ func (c Connection) IsTarget(ipPack *layers.IPv4, tcpPack *layers.TCP) bool {
 		tcpPack.DstPort == c.SelfPort
 }
 
+// todo send should wait last data to be acked
 func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
 	s.RLock()
 	defer s.RUnlock()
@@ -260,7 +269,76 @@ func (c *Connection) caculateSelfNext(ip *layers.IPv4, tcp *layers.TCP) {
 	}
 }
 
-func Close(conn int) (err error) {
+func (c *Connection) waitAllDataSent() {
+	t := time.NewTicker(time.Millisecond)
+	for {
+		select {
+		case <-t.C:
+			if len(c.sendWin) == 0 {
+				// all data has been sent
+				return
+			}
+		}
+	}
+}
+
+func (c *Connection) Close() (err error) {
+	c.waitAllDataSent()
+	ipLay := layers.IPv4{
+		BaseLayer:  layers.BaseLayer{},      // todo
+		Version:    4,                       // ipv4
+		IHL:        0,                       // let gopacket compute this
+		TOS:        0,                       // type of service
+		Length:     0,                       // let gopacket compute this
+		Id:         0,                       // todo unique id
+		Flags:      layers.IPv4DontFragment, // do not fragment in ip layer, tcp layer will do better
+		FragOffset: 0,                       // let gopacket compute this
+		TTL:        64,                      // the default ttl is stored in /proc/sys/net/ipv4/ip_default_ttl
+		Protocol:   layers.IPProtocolTCP,    // protocol over ip layer
+		Checksum:   0,                       // let gopacket compute this
+		SrcIP:      c.SelfIp,                // self ip
+		DstIP:      c.PeerIp,                // dst ip
+		Options:    nil,                     // options, ignore now
+		Padding:    nil,                     // ignore now
+	}
+
+	tcpLay := layers.TCP{
+		BaseLayer:  layers.BaseLayer{},
+		SrcPort:    c.SelfPort, //
+		DstPort:    c.PeerPort, //
+		Seq:        c.SelfNxt,  //
+		Ack:        c.PeerNxt,  //
+		DataOffset: 0,
+		FIN:        true,
+		SYN:        false,
+		RST:        false,
+		PSH:        false,
+		ACK:        true,
+		URG:        false,
+		ECE:        false,
+		CWR:        false,
+		NS:         false,
+		Window:     uint16(c.Window()),
+		Checksum:   0, // let go packet caculate it
+		Urgent:     0,
+		Options:    nil,
+		Padding:    nil,
+	}
+
+	err = c.Socket.WritePacket(&ipLay, &tcpLay, nil)
+	if err != nil {
+		return
+	}
+	c.State = FIN_WAIT_1
+	c.sockFd.Close <- struct{}{}
+	return
+}
+
+// todo close will wait until all data has been sent
+func (s *Socket) Close(conn int) (err error) {
+	s.RLock()
+	defer s.RUnlock()
+	s.releaseSockFd(conn)
 	return
 }
 
@@ -327,12 +405,17 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Seq {
 			s.Lock()
 			connection.State = ESTAB
-			connection.window = make([]byte, 0, s.WindowSize)
-			s.connections = append(s.connections, connection)
+			connection.recvWin = make([]byte, 0, s.WindowSize)
+			connection.sendWin = make([]byte, 0, s.WindowSize)
 			fd, sockFd := s.applyNewSockFd()
+			if fd < 0 {
+				err = errors.New("no fds")
+				return
+			}
 			connection.fd = fd
 			connection.sockFd = sockFd
 			s.portConn[connection.PeerPort] = connection
+			delete(s.SynQueue, connection.PeerPort)
 			s.AcceptQueue = append(s.AcceptQueue, connection)
 			connection.startSendDataLoop()
 			s.Unlock()
@@ -347,6 +430,12 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			connection.State = CLOSED
 			return
 		}
+		if pack.TcpPack.ACK && !pack.TcpPack.PSH && len(pack.TcpPack.Payload) == 0 {
+			// just normal ack
+			// todo handle tcp split packet
+			connection.caculateSelfNext(pack.IpPack, pack.TcpPack)
+			connection.sendWin = []byte{}
+		}
 		err = connection.sendAck(pack.IpPack, pack.TcpPack)
 		if err != nil {
 			return
@@ -355,12 +444,31 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 		if len(payload) == 0 {
 			return
 		}
-		connection.window = append(connection.window, payload...)
+		connection.recvWin = append(connection.recvWin, payload...)
 		// push data to application when PSH is set
 		if pack.TcpPack.PSH {
-			connection.sockFd.In <- connection.window
-			connection.window = make([]byte, 0, s.WindowSize)
+			connection.sockFd.In <- connection.recvWin
+			connection.recvWin = make([]byte, 0, s.WindowSize)
 		}
+	case FIN_WAIT_1:
+		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Seq {
+			if !pack.TcpPack.FIN {
+				connection.State = FINWAIT_2
+			} else {
+				connection.State = CLOSE_WAIT
+				delete(s.portConn, connection.PeerPort)
+				connection.sendAck(pack.IpPack, pack.TcpPack)
+			}
+		}
+	case FINWAIT_2:
+		if pack.TcpPack.FIN {
+			connection.State = CLOSE_WAIT
+			delete(s.portConn, connection.PeerPort)
+			// last ack
+			connection.sendAck(pack.IpPack, pack.TcpPack)
+		}
+	//case CLOSE_WAIT:
+	//case LAST_ACK:
 	default:
 		infra.Logger.Debug().Msg("not expect packet, ignore")
 	}
@@ -426,28 +534,6 @@ func (s *Socket) sendSyn(conn *Connection, pack tuntap.Packet) (err error) {
 	return
 }
 
-//func (s *Socket) WritePacketWithBuf(ip *layers.IPv4, tcp *layers.TCP, buf []byte) (err error) {
-//	// checksum needed
-//	err = tcp.SetNetworkLayerForChecksum(ip)
-//	if err != nil {
-//		return
-//	}
-//	buffer := gopacket.NewSerializeBuffer()
-//	err = gopacket.SerializeLayers(buffer, gopacket.SerializeOptions{
-//		FixLengths:       true,
-//		ComputeChecksums: true,
-//	},
-//		ip,
-//		tcp,
-//		gopacket.Payload(buf),
-//	)
-//	if err != nil {
-//	}
-//	// invalid argument if buffer is not valid ip packet
-//	err = s.Dev.Write(buffer.Bytes())
-//	return
-//}
-
 func (s *Socket) WritePacket(ip *layers.IPv4, tcp *layers.TCP, data []byte) (err error) {
 	infra.Logger.Debug().Msgf("write packet %s:%s -> %s:%s syn:%v ack:%v fin:%v psh:%v seq:%v ack:%v payload:%v",
 		ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort, tcp.SYN, tcp.ACK, tcp.FIN, tcp.PSH, tcp.Seq, tcp.Ack, string(data))
@@ -487,10 +573,27 @@ func (s *Socket) getConnection(pack tuntap.Packet) (connection *Connection) {
 }
 
 func (s *Socket) applyNewSockFd() (fdId int, newFd Stream) {
-	newFd = NewStream()
-	s.sockFds = append(s.sockFds, newFd)
-	fdId = len(s.sockFds) - 1
+	// todo better fd allocating algorithm
+	for i := 0; i < s.fdLimit; i++ {
+		if _, ok := s.sockFds[i]; ok {
+			continue
+		}
+		newFd = NewStream()
+		fdId = i
+		s.sockFds[fdId] = newFd
+		return
+	}
+	fdId = -1
 	return
+}
+
+func (s *Socket) releaseSockFd(fdId int) {
+	c := s.sockFds[fdId]
+	c.Close <- struct{}{} // send close signal
+	<-c.Close             // wait close complete
+	close(c.In)
+	close(c.Out)
+	delete(s.sockFds, fdId)
 }
 
 func (c *Connection) startSendDataLoop() {
@@ -502,6 +605,9 @@ func (c *Connection) startSendDataLoop() {
 				if err != nil {
 					infra.Logger.Error().Err(err)
 				}
+			case <-c.sockFd.Close:
+				c.Close()
+				return
 			}
 		}
 	}()
@@ -509,6 +615,7 @@ func (c *Connection) startSendDataLoop() {
 
 func (c *Connection) Send(buf []byte) (n int, err error) {
 	infra.Logger.Debug().Msg("send data")
+	c.sendWin = append(c.sendWin, buf...)
 	ipLay := layers.IPv4{
 		BaseLayer:  layers.BaseLayer{},      // todo
 		Version:    4,                       // ipv4
