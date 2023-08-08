@@ -16,8 +16,9 @@ import (
 )
 
 type SocketOptions struct {
-	WindowSize uint16
-	Ttl        uint8
+	WindowSize     uint16
+	Ttl            uint8
+	LimitOpenFiles int
 }
 
 type Socket struct {
@@ -28,7 +29,6 @@ type Socket struct {
 	synQueue    map[layers.TCPPort]*Connection
 	acceptQueue []*Connection
 	sockFds     map[int]Fd
-	fdLimit     int
 	Opt         SocketOptions
 	sync.RWMutex
 }
@@ -37,7 +37,6 @@ func NewSocket(opt SocketOptions) Socket {
 	return Socket{
 		estabConn: make(map[layers.TCPPort]*Connection),
 		synQueue:  make(map[layers.TCPPort]*Connection),
-		fdLimit:   1024,
 		sockFds:   make(map[int]Fd),
 		Opt:       opt,
 	}
@@ -82,15 +81,14 @@ type Connection struct {
 	DstIp    net.IP
 	SrcPort  layers.TCPPort
 	DstPort  layers.TCPPort
-	DstNxt   uint32
-	SrcNxt   uint32
+	dstAcked uint32
+	srcAcked uint32
 	windSize uint16
 	recvWin  []byte
 	sendWin  []byte
-	sendPtr  int
-	recvPtr  int
 	sockFd   Fd
 	fd       int
+	sentSeq  uint32
 }
 
 type Fd struct {
@@ -124,7 +122,7 @@ func (s *Socket) cleanConnection(conn *Connection) {
 }
 
 func (c *Connection) validateSeq(pack tuntap.Packet) bool {
-	return pack.TcpPack.Seq == c.DstNxt
+	return pack.TcpPack.Seq == c.dstAcked+1
 }
 
 func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
@@ -182,22 +180,22 @@ func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 
 func (c *Connection) caculatePeerNext(ip *layers.IPv4, tcp *layers.TCP) {
 	if tcp.SYN || tcp.FIN {
-		c.DstNxt = tcp.Seq + 1
+		c.dstAcked = tcp.Seq
 		return
 	}
 	if len(tcp.Payload) > 0 {
-		c.DstNxt = c.DstNxt + uint32(len(tcp.Payload))
+		c.dstAcked = c.dstAcked + uint32(len(tcp.Payload))
 	}
 }
 
 func (c *Connection) caculateSelfNext(ip *layers.IPv4, tcp *layers.TCP) {
 	if tcp.SYN {
-		c.SrcNxt = uint32(rand.Int())
+		c.srcAcked = uint32(rand.Int()) - 1
 		return
 	}
 	if tcp.ACK {
 		// todo verify this ack
-		c.SrcNxt = tcp.Ack
+		c.srcAcked = tcp.Ack - 1
 		return
 	}
 }
@@ -290,53 +288,31 @@ func (s *Socket) Accept() (conn int, err error) {
 	}
 }
 
-func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (err error) {
+func (s *Socket) tcpStateMachine(conn *Connection, pack tuntap.Packet) (err error) {
 	// todo 校验重复包
-	switch connection.State {
+	switch conn.State {
 	case StateClosed, StateListen:
 		if pack.TcpPack.SYN {
-			err = s.handleSyn(connection, pack)
-			if err != nil {
-				return
-			}
-			s.synQueue[pack.TcpPack.SrcPort] = connection
+			err = s.handleSyn(conn, pack)
 		}
 	case StateSynRcvd:
-		if pack.TcpPack.ACK && connection.DstNxt == pack.TcpPack.Seq {
-			s.Lock()
-			connection.State = StateEstab
-			connection.recvWin = make([]byte, 0, s.Opt.WindowSize)
-			connection.sendWin = make([]byte, 0, s.Opt.WindowSize)
-			fd, sockFd := s.applyNewSockFd()
-			if fd < 0 {
-				err = errors.New("no fds")
-				return
-			}
-			connection.fd = fd
-			connection.sockFd = sockFd
-			s.estabConn[connection.DstPort] = connection
-			delete(s.synQueue, connection.DstPort)
-			s.acceptQueue = append(s.acceptQueue, connection)
-			connection.startSendDataLoop()
-			s.Unlock()
-			return
-		}
+		err = s.handleSynAck(conn, pack)
 	case StateEstab:
 		if pack.TcpPack.FIN {
-			err = connection.tcpFIN(pack.IpPack, pack.TcpPack)
+			err = conn.tcpFIN(pack.IpPack, pack.TcpPack)
 			if err != nil {
 				return
 			}
-			connection.State = StateClosed
+			conn.State = StateClosed
 			return
 		}
 		if pack.TcpPack.ACK && !pack.TcpPack.PSH && len(pack.TcpPack.Payload) == 0 {
 			// just normal ack
 			// todo handle tcp split packet
-			connection.caculateSelfNext(pack.IpPack, pack.TcpPack)
-			connection.sendWin = []byte{}
+			conn.caculateSelfNext(pack.IpPack, pack.TcpPack)
+			conn.sendWin = []byte{}
 		}
-		err = connection.sendAck(pack.IpPack, pack.TcpPack)
+		err = conn.sendAck(pack.IpPack, pack.TcpPack)
 		if err != nil {
 			return
 		}
@@ -344,28 +320,28 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 		if len(payload) == 0 {
 			return
 		}
-		connection.recvWin = append(connection.recvWin, payload...)
+		conn.recvWin = append(conn.recvWin, payload...)
 		// push data to application when PSH is set
 		if pack.TcpPack.PSH {
-			connection.sockFd.In <- connection.recvWin
-			connection.recvWin = make([]byte, 0, s.Opt.WindowSize)
+			conn.sockFd.In <- conn.recvWin
+			conn.recvWin = make([]byte, 0, s.Opt.WindowSize)
 		}
 	case StateFinWait1:
-		if pack.TcpPack.ACK && connection.DstNxt == pack.TcpPack.Seq {
+		if pack.TcpPack.ACK && conn.validateSeq(pack) {
 			if !pack.TcpPack.FIN {
-				connection.State = StateFinWait2
+				conn.State = StateFinWait2
 			} else {
-				connection.State = StateCloseWait
-				delete(s.estabConn, connection.DstPort)
-				connection.sendAck(pack.IpPack, pack.TcpPack)
+				conn.State = StateCloseWait
+				delete(s.estabConn, conn.DstPort)
+				conn.sendAck(pack.IpPack, pack.TcpPack)
 			}
 		}
 	case StateFinWait2:
 		if pack.TcpPack.FIN {
-			connection.State = StateCloseWait
-			delete(s.estabConn, connection.DstPort)
+			conn.State = StateCloseWait
+			delete(s.estabConn, conn.DstPort)
 			// last ack
-			connection.sendAck(pack.IpPack, pack.TcpPack)
+			conn.sendAck(pack.IpPack, pack.TcpPack)
 		}
 	//case :
 	//case :
@@ -396,6 +372,37 @@ func (s *Socket) handleSyn(conn *Connection, pack tuntap.Packet) (err error) {
 		return
 	}
 	conn.State = StateSynRcvd
+	conn.sentSeq = tcpLay.Seq
+	s.synQueue[pack.TcpPack.SrcPort] = conn
+	return
+}
+
+func (s *Socket) handleSynAck(conn *Connection, pack tuntap.Packet) (err error) {
+	if !conn.validateSeq(pack) {
+		return
+	}
+	if !pack.TcpPack.ACK && pack.TcpPack.Ack != conn.sentSeq {
+		// not ack my syn packet
+		return
+	}
+	conn.State = StateEstab
+	conn.recvWin = make([]byte, 0, s.Opt.WindowSize)
+	conn.sendWin = make([]byte, 0, s.Opt.WindowSize)
+
+	s.Lock()
+	fd, sockFd := s.applyNewSockFd()
+	if fd < 0 {
+		err = errors.New("no fds")
+		return
+	}
+	conn.fd = fd
+	conn.sockFd = sockFd
+	s.estabConn[conn.DstPort] = conn
+	delete(s.synQueue, conn.DstPort)
+	s.acceptQueue = append(s.acceptQueue, conn)
+	s.Unlock()
+
+	conn.startSendDataLoop()
 	return
 }
 
@@ -439,7 +446,7 @@ func (s *Socket) getConnection(pack tuntap.Packet) (connection *Connection) {
 
 func (s *Socket) applyNewSockFd() (fdId int, newFd Fd) {
 	// todo better fd allocating algorithm
-	for i := 0; i < s.fdLimit; i++ {
+	for i := 0; i < s.Opt.LimitOpenFiles; i++ {
 		if _, ok := s.sockFds[i]; ok {
 			continue
 		}
@@ -521,8 +528,8 @@ func (c *Connection) tcpPack(flags TcpFlags) layers.TCP {
 	return layers.TCP{
 		SrcPort:    c.SrcPort,
 		DstPort:    c.DstPort,
-		Seq:        c.SrcNxt,
-		Ack:        c.DstNxt,
+		Seq:        c.srcAcked + 1,
+		Ack:        c.dstAcked + 1,
 		DataOffset: 0,
 		FIN:        flags.FIN,
 		SYN:        flags.SYN,
