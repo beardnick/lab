@@ -41,32 +41,32 @@ func NewSocket() Socket {
 type TcpState int
 
 const (
-	CLOSED TcpState = iota
-	LISTEN
-	SYN_RCVD
-	SYN_SENT
-	ESTAB
-	FIN_WAIT_1
-	CLOSE_WAIT
-	CLOSING
-	FINWAIT_2
-	TIME_WAIT
-	LAST_ACK
+	StateClosed TcpState = iota
+	StateListen
+	StateSynRcvd
+	StateSynSent
+	StateEstab
+	StateFinWait1
+	StateCloseWait
+	StateClosing
+	StateFinWait2
+	StateTimeWait
+	StateLastAck
 )
 
 func (s TcpState) String() string {
 	return [...]string{
-		"CLOSED",
-		"LISTEN",
-		"SYN_RCVD",
-		"SYN_SENT",
-		"ESTAB",
-		"FIN_WAIT_1",
-		"CLOSE_WAIT",
-		"CLOSING",
-		"FINWAIT_2",
-		"TIME_WAIT",
-		"LAST_ACK",
+		"StateClosed",
+		"StateListen",
+		"StateSynRcvd",
+		"StateSynSent",
+		"StateEstab",
+		"StateFinWait1",
+		"StateCloseWait",
+		"StateClosing",
+		"StateFinWait2",
+		"StateTimeWait",
+		"StateLastAck",
 	}[s]
 }
 
@@ -108,7 +108,7 @@ func (c Connection) Window() uint16 {
 
 func NewConnection(socket *Socket, wind uint16) *Connection {
 	return &Connection{
-		State:    LISTEN,
+		State:    StateListen,
 		windSize: wind,
 		Socket:   socket,
 	}
@@ -329,7 +329,7 @@ func (c *Connection) Close() (err error) {
 	if err != nil {
 		return
 	}
-	c.State = FIN_WAIT_1
+	c.State = StateFinWait1
 	c.sockFd.Close <- struct{}{}
 	return
 }
@@ -393,7 +393,7 @@ func (s *Socket) Accept() (conn int, err error) {
 func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (err error) {
 	// todo 校验重复包
 	switch connection.State {
-	case CLOSED, LISTEN:
+	case StateClosed, StateListen:
 		if pack.TcpPack.SYN {
 			err = s.sendSyn(connection, pack)
 			if err != nil {
@@ -401,10 +401,10 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			}
 			s.SynQueue[pack.TcpPack.SrcPort] = connection
 		}
-	case SYN_RCVD:
+	case StateSynRcvd:
 		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Seq {
 			s.Lock()
-			connection.State = ESTAB
+			connection.State = StateEstab
 			connection.recvWin = make([]byte, 0, s.WindowSize)
 			connection.sendWin = make([]byte, 0, s.WindowSize)
 			fd, sockFd := s.applyNewSockFd()
@@ -421,13 +421,13 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			s.Unlock()
 			return
 		}
-	case ESTAB:
+	case StateEstab:
 		if pack.TcpPack.FIN {
 			err = connection.tcpFIN(pack.IpPack, pack.TcpPack)
 			if err != nil {
 				return
 			}
-			connection.State = CLOSED
+			connection.State = StateClosed
 			return
 		}
 		if pack.TcpPack.ACK && !pack.TcpPack.PSH && len(pack.TcpPack.Payload) == 0 {
@@ -450,25 +450,25 @@ func (s *Socket) tcpStateMachine(connection *Connection, pack tuntap.Packet) (er
 			connection.sockFd.In <- connection.recvWin
 			connection.recvWin = make([]byte, 0, s.WindowSize)
 		}
-	case FIN_WAIT_1:
+	case StateFinWait1:
 		if pack.TcpPack.ACK && connection.PeerNxt == pack.TcpPack.Seq {
 			if !pack.TcpPack.FIN {
-				connection.State = FINWAIT_2
+				connection.State = StateFinWait2
 			} else {
-				connection.State = CLOSE_WAIT
+				connection.State = StateCloseWait
 				delete(s.portConn, connection.PeerPort)
 				connection.sendAck(pack.IpPack, pack.TcpPack)
 			}
 		}
-	case FINWAIT_2:
+	case StateFinWait2:
 		if pack.TcpPack.FIN {
-			connection.State = CLOSE_WAIT
+			connection.State = StateCloseWait
 			delete(s.portConn, connection.PeerPort)
 			// last ack
 			connection.sendAck(pack.IpPack, pack.TcpPack)
 		}
-	//case CLOSE_WAIT:
-	//case LAST_ACK:
+	//case :
+	//case :
 	default:
 		infra.Logger.Debug().Msg("not expect packet, ignore")
 	}
@@ -530,7 +530,7 @@ func (s *Socket) sendSyn(conn *Connection, pack tuntap.Packet) (err error) {
 	if err != nil {
 		return
 	}
-	conn.State = SYN_RCVD
+	conn.State = StateSynRcvd
 	return
 }
 
