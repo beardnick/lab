@@ -21,7 +21,10 @@ func TestTcp(t *testing.T) {
 	err = dev.StartUp("192.168.1.1/24")
 	assert.Nil(t, err)
 
-	s := tcp.NewSocket()
+	s := tcp.NewSocket(tcp.SocketOptions{
+		WindowSize: 1024,
+		Ttl:        64,
+	})
 	err = s.Bind("192.168.1.2", 8080)
 	assert.Nil(t, err)
 	s.Listen()

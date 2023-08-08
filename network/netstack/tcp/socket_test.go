@@ -61,10 +61,10 @@ func TestConnection_caculateNext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Connection{
-				PeerNxt: tt.fields.PeerNxt,
+				DstNxt: tt.fields.PeerNxt,
 			}
 			c.caculatePeerNext(tt.args.ip, tt.args.tcp)
-			assert.Equal(t, tt.wantPeerNext, c.PeerNxt)
+			assert.Equal(t, tt.wantPeerNext, c.DstNxt)
 		})
 	}
 }
