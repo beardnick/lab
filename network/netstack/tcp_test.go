@@ -22,9 +22,10 @@ func TestTcp(t *testing.T) {
 	assert.Nil(t, err)
 
 	s := tcp.NewSocket(tcp.SocketOptions{
-		WindowSize:     1024,
-		Ttl:            64,
-		LimitOpenFiles: 1024,
+		WindowSize:       1024,
+		Ttl:              64,
+		LimitOpenFiles:   1024,
+		SendDataInterval: time.Millisecond,
 	})
 	err = s.Bind("192.168.1.2", 8080)
 	assert.Nil(t, err)

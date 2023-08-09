@@ -16,9 +16,10 @@ import (
 )
 
 type SocketOptions struct {
-	WindowSize     uint16
-	Ttl            uint8
-	LimitOpenFiles int
+	WindowSize       uint16
+	Ttl              uint8
+	LimitOpenFiles   int
+	SendDataInterval time.Duration
 }
 
 type Socket struct {
@@ -89,19 +90,22 @@ type Connection struct {
 	sockFd   Fd
 	fd       int
 	sentSeq  uint32
+	sync.Mutex
 }
 
 type Fd struct {
-	In    chan []byte
-	Out   chan []byte
-	Close chan struct{}
+	In        chan []byte
+	Out       chan []byte
+	OutFinish chan struct{}
+	Close     chan struct{}
 }
 
 func NewFd() Fd {
 	return Fd{
-		In:    make(chan []byte),
-		Out:   make(chan []byte),
-		Close: make(chan struct{}),
+		In:        make(chan []byte),
+		Out:       make(chan []byte),
+		OutFinish: make(chan struct{}),
+		Close:     make(chan struct{}),
 	}
 }
 
@@ -129,6 +133,7 @@ func (s *Socket) Send(conn int, buf []byte) (n int, err error) {
 	s.RLock()
 	defer s.RUnlock()
 	s.sockFds[conn].Out <- buf
+	<-s.sockFds[conn].OutFinish
 	return
 }
 
@@ -150,22 +155,33 @@ func (s *Socket) ReadPacket() (pack tuntap.Packet, err error) {
 	return
 }
 
-func (c *Connection) tcpFIN(ip *layers.IPv4, tcp *layers.TCP) (err error) {
+func (c *Connection) handleTcpFin(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	ipLay := c.ipPack()
 
 	c.caculatePeerNext(ip, tcp)
 	c.caculateSelfNext(ip, tcp)
 
-	tcpLay := c.tcpPack(TcpFlags{FIN: true, ACK: true})
-
+	c.Lock()
+	defer c.Unlock()
+	if len(c.sendWin) == 0 {
+		tcpLay := c.tcpPack(TcpFlags{FIN: true, ACK: true})
+		err = c.Socket.WritePacket(&ipLay, &tcpLay, nil)
+		if err != nil {
+			return
+		}
+		c.State = StateLastAck
+		return
+	}
+	tcpLay := c.tcpPack(TcpFlags{ACK: true})
 	err = c.Socket.WritePacket(&ipLay, &tcpLay, nil)
 	if err != nil {
 		return
 	}
+	c.State = StateCloseWait
 	return
 }
 
-func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
+func (c *Connection) sendSimpleDataAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	ipLay := c.ipPack()
 
 	c.caculateSelfNext(ip, tcp)
@@ -179,23 +195,36 @@ func (c *Connection) sendAck(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 }
 
 func (c *Connection) caculatePeerNext(ip *layers.IPv4, tcp *layers.TCP) {
+	c.Lock()
+	defer c.Unlock()
 	if tcp.SYN || tcp.FIN {
 		c.dstAcked = tcp.Seq
 		return
 	}
+	// #LAST payload may be split
 	if len(tcp.Payload) > 0 {
 		c.dstAcked = c.dstAcked + uint32(len(tcp.Payload))
 	}
 }
 
 func (c *Connection) caculateSelfNext(ip *layers.IPv4, tcp *layers.TCP) {
+	c.Lock()
+	defer c.Unlock()
 	if tcp.SYN {
 		c.srcAcked = uint32(rand.Int()) - 1
 		return
 	}
 	if tcp.ACK {
-		// todo verify this ack
-		c.srcAcked = tcp.Ack - 1
+		newAcked := tcp.Ack - 1
+		if newAcked > c.srcAcked && newAcked <= c.sentSeq {
+			// really ack this connections data
+			// |acked+1|acked+2|...|new_acked          |new_acked+1|
+			// |   0   |   1   |...|new_acked-(acked+1)|new_acked-acked|
+			// |       sent                            |unsent    |
+			// new_acked = tcp.Ack - 1
+			c.sendWin = c.sendWin[newAcked-c.srcAcked:]
+			c.srcAcked = newAcked
+		}
 		return
 	}
 }
@@ -205,10 +234,19 @@ func (c *Connection) waitAllDataSent() {
 	for {
 		select {
 		case <-t.C:
+			c.Lock()
+			// #NOTE
+			// 注意这里的时序性问题
+			// 一定是使用sendWin来判断是否数据传输完成
+			// 如果使用acked sentSeq来判断，是有一定滞后性的
+			// 有可能sendWin已经有数据了，但是没有发送出去，那么acked sentSeq就是相等的
+			// 会误判断数据已经传输完成了
 			if len(c.sendWin) == 0 {
+				c.Unlock()
 				// all data has been sent
 				return
 			}
+			c.Unlock()
 		}
 	}
 }
@@ -298,34 +336,7 @@ func (s *Socket) tcpStateMachine(conn *Connection, pack tuntap.Packet) (err erro
 	case StateSynRcvd:
 		err = s.handleSynAck(conn, pack)
 	case StateEstab:
-		if pack.TcpPack.FIN {
-			err = conn.tcpFIN(pack.IpPack, pack.TcpPack)
-			if err != nil {
-				return
-			}
-			conn.State = StateClosed
-			return
-		}
-		if pack.TcpPack.ACK && !pack.TcpPack.PSH && len(pack.TcpPack.Payload) == 0 {
-			// just normal ack
-			// todo handle tcp split packet
-			conn.caculateSelfNext(pack.IpPack, pack.TcpPack)
-			conn.sendWin = []byte{}
-		}
-		err = conn.sendAck(pack.IpPack, pack.TcpPack)
-		if err != nil {
-			return
-		}
-		payload := pack.TcpPack.Payload
-		if len(payload) == 0 {
-			return
-		}
-		conn.recvWin = append(conn.recvWin, payload...)
-		// push data to application when PSH is set
-		if pack.TcpPack.PSH {
-			conn.sockFd.In <- conn.recvWin
-			conn.recvWin = make([]byte, 0, s.Opt.WindowSize)
-		}
+		err = conn.handleEstabPack(pack)
 	case StateFinWait1:
 		if pack.TcpPack.ACK && conn.validateSeq(pack) {
 			if !pack.TcpPack.FIN {
@@ -333,7 +344,7 @@ func (s *Socket) tcpStateMachine(conn *Connection, pack tuntap.Packet) (err erro
 			} else {
 				conn.State = StateCloseWait
 				delete(s.estabConn, conn.DstPort)
-				conn.sendAck(pack.IpPack, pack.TcpPack)
+				conn.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
 			}
 		}
 	case StateFinWait2:
@@ -341,7 +352,7 @@ func (s *Socket) tcpStateMachine(conn *Connection, pack tuntap.Packet) (err erro
 			conn.State = StateCloseWait
 			delete(s.estabConn, conn.DstPort)
 			// last ack
-			conn.sendAck(pack.IpPack, pack.TcpPack)
+			conn.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
 		}
 	//case :
 	//case :
@@ -374,6 +385,8 @@ func (s *Socket) handleSyn(conn *Connection, pack tuntap.Packet) (err error) {
 	conn.State = StateSynRcvd
 	conn.sentSeq = tcpLay.Seq
 	s.synQueue[pack.TcpPack.SrcPort] = conn
+	// mark syn as a special data logically
+	conn.sendWin = append(conn.sendWin, 'S')
 	return
 }
 
@@ -385,6 +398,7 @@ func (s *Socket) handleSynAck(conn *Connection, pack tuntap.Packet) (err error) 
 		// not ack my syn packet
 		return
 	}
+	conn.caculateSelfNext(pack.IpPack, pack.TcpPack)
 	conn.State = StateEstab
 	conn.recvWin = make([]byte, 0, s.Opt.WindowSize)
 	conn.sendWin = make([]byte, 0, s.Opt.WindowSize)
@@ -403,6 +417,41 @@ func (s *Socket) handleSynAck(conn *Connection, pack tuntap.Packet) (err error) 
 	s.Unlock()
 
 	conn.startSendDataLoop()
+	return
+}
+
+func (c *Connection) handleEstabPack(pack tuntap.Packet) (err error) {
+	if !pack.TcpPack.ACK {
+		infra.Logger.Warn().Msgf("invalid packet,ACK should be true when estabed")
+		return
+	}
+	if !c.validateSeq(pack) {
+		return
+	}
+	if pack.TcpPack.FIN {
+		err = c.handleTcpFin(pack.IpPack, pack.TcpPack)
+		return
+	}
+	if len(pack.TcpPack.Payload) == 0 {
+		c.caculateSelfNext(pack.IpPack, pack.TcpPack)
+		return
+	}
+
+	payload := pack.TcpPack.Payload
+	if len(payload)+len(c.recvWin) > int(c.Socket.Opt.WindowSize) {
+		payload = payload[:(len(payload)+len(c.recvWin))-int(c.Socket.Opt.WindowSize)]
+	}
+	c.recvWin = append(c.recvWin, payload...)
+	// push data to application layer when PSH is set
+	if pack.TcpPack.PSH {
+		c.sockFd.In <- c.recvWin
+		c.recvWin = make([]byte, 0, c.Socket.Opt.WindowSize)
+	}
+
+	err = c.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -472,22 +521,45 @@ func (c *Connection) startSendDataLoop() {
 	go func() {
 		for {
 			select {
+			// #NOTE
+			// 注意这里的时序问题
+			// out中的数据读出来了但是不能说明数据读取成功了
+			// 必须要数据装到sendWin中才算成功，才能释放掉阻塞的socket.Send操作
 			case data := <-c.sockFd.Out:
-				_, err := c.Send(data)
-				if err != nil {
-					infra.Logger.Error().Err(err)
-				}
+				c.Lock()
+				// todo send win full
+				c.sendWin = append(c.sendWin, data...)
+				c.Unlock()
+				c.sockFd.OutFinish <- struct{}{} // indicate send data finished
 			case <-c.sockFd.Close:
 				c.Close()
 				return
 			}
 		}
 	}()
+	go func() {
+		t := time.NewTicker(c.Socket.Opt.SendDataInterval)
+		for {
+			select {
+			case <-t.C:
+				c.Lock()
+				if len(c.sendWin) > 0 {
+					// |acked+1|acked+2|...|sent          |sent+1|
+					// |   0   |   1   |...|sent-(acked+1)|sent-acked|
+					// |       sent                       |unsent    |
+					_, err := c.Send(c.sendWin[c.sentSeq-c.srcAcked:])
+					if err != nil {
+						infra.Logger.Err(err)
+					}
+				}
+				c.Unlock()
+			}
+		}
+	}()
 }
 
 func (c *Connection) Send(buf []byte) (n int, err error) {
-	infra.Logger.Debug().Msg("send data")
-	c.sendWin = append(c.sendWin, buf...)
+	infra.Logger.Debug().Msgf("send data %v", string(buf))
 	ipLay := c.ipPack()
 
 	tcpLay := c.tcpPack(TcpFlags{
@@ -496,6 +568,10 @@ func (c *Connection) Send(buf []byte) (n int, err error) {
 	})
 
 	err = c.Socket.WritePacket(&ipLay, &tcpLay, buf)
+	if err != nil {
+		return
+	}
+	c.sentSeq = c.sentSeq + uint32(len(buf))
 	return
 }
 
