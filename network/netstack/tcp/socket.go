@@ -158,11 +158,11 @@ func (s *Socket) ReadPacket() (pack tuntap.Packet, err error) {
 func (c *Connection) handleTcpFin(ip *layers.IPv4, tcp *layers.TCP) (err error) {
 	ipLay := c.ipPack()
 
+	c.Lock()
+	defer c.Unlock()
 	c.caculatePeerNext(ip, tcp)
 	c.caculateSelfNext(ip, tcp)
 
-	c.Lock()
-	defer c.Unlock()
 	if len(c.sendWin) == 0 {
 		tcpLay := c.tcpPack(TcpFlags{FIN: true, ACK: true})
 		err = c.Socket.WritePacket(&ipLay, &tcpLay, nil)
@@ -195,8 +195,6 @@ func (c *Connection) sendSimpleDataAck(ip *layers.IPv4, tcp *layers.TCP) (err er
 }
 
 func (c *Connection) caculatePeerNext(ip *layers.IPv4, tcp *layers.TCP) {
-	c.Lock()
-	defer c.Unlock()
 	if tcp.SYN || tcp.FIN {
 		c.dstAcked = tcp.Seq
 		return
@@ -208,8 +206,6 @@ func (c *Connection) caculatePeerNext(ip *layers.IPv4, tcp *layers.TCP) {
 }
 
 func (c *Connection) caculateSelfNext(ip *layers.IPv4, tcp *layers.TCP) {
-	c.Lock()
-	defer c.Unlock()
 	if tcp.SYN {
 		c.srcAcked = uint32(rand.Int()) - 1
 		return
@@ -265,7 +261,9 @@ func (c *Connection) Close() (err error) {
 	if err != nil {
 		return
 	}
+	c.Lock()
 	c.State = StateFinWait1
+	c.Unlock()
 	c.sockFd.Close <- struct{}{}
 	return
 }
@@ -338,22 +336,9 @@ func (s *Socket) tcpStateMachine(conn *Connection, pack tuntap.Packet) (err erro
 	case StateEstab:
 		err = conn.handleEstabPack(pack)
 	case StateFinWait1:
-		if pack.TcpPack.ACK && conn.validateSeq(pack) {
-			if !pack.TcpPack.FIN {
-				conn.State = StateFinWait2
-			} else {
-				conn.State = StateCloseWait
-				delete(s.estabConn, conn.DstPort)
-				conn.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
-			}
-		}
+		err = conn.handleFinWait1(pack)
 	case StateFinWait2:
-		if pack.TcpPack.FIN {
-			conn.State = StateCloseWait
-			delete(s.estabConn, conn.DstPort)
-			// last ack
-			conn.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
-		}
+		err = conn.handleFinWait2(pack)
 	//case :
 	//case :
 	default:
@@ -386,6 +371,7 @@ func (s *Socket) handleSyn(conn *Connection, pack tuntap.Packet) (err error) {
 	conn.sentSeq = tcpLay.Seq
 	s.synQueue[pack.TcpPack.SrcPort] = conn
 	// mark syn as a special data logically
+	// todo not a good implementation rewrite this
 	conn.sendWin = append(conn.sendWin, 'S')
 	return
 }
@@ -420,6 +406,24 @@ func (s *Socket) handleSynAck(conn *Connection, pack tuntap.Packet) (err error) 
 	return
 }
 
+func (c *Connection) recvData(pack tuntap.Packet) (err error) {
+	c.Lock()
+	defer c.Unlock()
+	payload := pack.TcpPack.Payload
+	if len(payload)+len(c.recvWin) > int(c.Socket.Opt.WindowSize) {
+		payload = payload[:(len(payload)+len(c.recvWin))-int(c.Socket.Opt.WindowSize)]
+	}
+	c.recvWin = append(c.recvWin, payload...)
+	// push data to application layer when PSH is set
+	if pack.TcpPack.PSH {
+		c.sockFd.In <- c.recvWin
+		c.recvWin = make([]byte, 0, c.Socket.Opt.WindowSize)
+	}
+
+	err = c.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
+	return
+}
+
 func (c *Connection) handleEstabPack(pack tuntap.Packet) (err error) {
 	if !pack.TcpPack.ACK {
 		infra.Logger.Warn().Msgf("invalid packet,ACK should be true when estabed")
@@ -437,21 +441,49 @@ func (c *Connection) handleEstabPack(pack tuntap.Packet) (err error) {
 		return
 	}
 
-	payload := pack.TcpPack.Payload
-	if len(payload)+len(c.recvWin) > int(c.Socket.Opt.WindowSize) {
-		payload = payload[:(len(payload)+len(c.recvWin))-int(c.Socket.Opt.WindowSize)]
-	}
-	c.recvWin = append(c.recvWin, payload...)
-	// push data to application layer when PSH is set
-	if pack.TcpPack.PSH {
-		c.sockFd.In <- c.recvWin
-		c.recvWin = make([]byte, 0, c.Socket.Opt.WindowSize)
-	}
+	err = c.recvData(pack)
+	return
+}
 
-	err = c.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
-	if err != nil {
+func (c *Connection) handleFinWait1(pack tuntap.Packet) (err error) {
+	if !c.validateSeq(pack) {
 		return
 	}
+	if !pack.TcpPack.ACK || pack.TcpPack.Ack-1 != c.sentSeq {
+		return
+	}
+	c.Lock()
+	defer c.Unlock()
+	if !pack.TcpPack.FIN {
+		c.State = StateFinWait2
+		return
+	}
+	// todo close wait handle
+	c.State = StateCloseWait
+	delete(c.Socket.estabConn, c.DstPort)
+	err = c.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
+	return
+}
+
+func (c *Connection) handleFinWait2(pack tuntap.Packet) (err error) {
+	if !c.validateSeq(pack) {
+		return
+	}
+	if pack.TcpPack.FIN {
+		c.Lock()
+		defer c.Unlock()
+		c.State = StateCloseWait
+		delete(c.Socket.estabConn, c.DstPort)
+		err = c.sendSimpleDataAck(pack.IpPack, pack.TcpPack)
+		return
+	}
+	if !pack.TcpPack.ACK {
+		return
+	}
+	if len(pack.TcpPack.Payload) == 0 {
+		return
+	}
+	err = c.recvData(pack)
 	return
 }
 
