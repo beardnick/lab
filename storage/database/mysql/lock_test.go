@@ -12,6 +12,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/ory/dockertest/v3"
+	"github.com/ory/dockertest/v3/docker"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,7 +34,17 @@ func TestMain(m *testing.M) {
 
 	// pulls an image, creates a container based on it and runs it
 	// resource, err := pool.Run("mysql", "5.7", []string{"MYSQL_ROOT_PASSWORD=secret"})
-	resource, err := pool.Run("mysql", "8.0", []string{"MYSQL_ROOT_PASSWORD=secret"})
+	resource, err := pool.RunWithOptions(
+		&dockertest.RunOptions{
+			Repository: "mysql",
+			Tag:        "8.0",
+			Env:        []string{"MYSQL_ROOT_PASSWORD=secret"},
+		},
+		func(hc *docker.HostConfig) {
+			hc.AutoRemove = true
+			hc.RestartPolicy = docker.RestartPolicy{Name: "no"}
+		},
+	)
 	if err != nil {
 		log.Fatalf("Could not start resource: %s", err)
 	}
