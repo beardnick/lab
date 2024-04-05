@@ -4,7 +4,6 @@ package main
 
 import (
 	"bufio"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"log"
 	"net"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTcp(t *testing.T) {
