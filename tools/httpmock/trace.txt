@@ -1,0 +1,776 @@
+CPU 0 is empty
+CPU 1 is empty
+CPU 2 is empty
+CPU 3 is empty
+CPU 4 is empty
+CPU 5 is empty
+CPU 7 is empty
+CPU 8 is empty
+CPU 9 is empty
+CPU 10 is empty
+CPU 11 is empty
+CPU 12 is empty
+CPU 13 is empty
+CPU 14 is empty
+CPU 15 is empty
+CPU 16 is empty
+CPU 17 is empty
+CPU 18 is empty
+CPU 19 is empty
+  %6.19  (29041) httpmock    _raw_spin_unlock_irqrestore #12
+         |
+         --- _raw_spin_unlock_irqrestore
+            |
+            |--%50.00-- trace_pid_list_is_set  # 6
+            |
+            |--%16.67-- try_to_wake_up  # 2
+            |
+            |--%16.67-- __wake_up_common_lock  # 2
+            |          __wake_up
+            |          rb_wake_up_waiters
+            |
+            |--%8.33-- cgroup_rstat_updated  # 1
+            |          __cgroup_account_cputime
+            |          update_curr
+            |          dequeue_entity
+            |          dequeue_task_fair
+            |          dequeue_task
+            |
+            |--%8.33-- hrtimer_start_range_ns  # 1
+                       do_nanosleep
+                       hrtimer_nanosleep
+                       __x64_sys_nanosleep
+                       do_syscall_64
+
+  %6.19  (29041) httpmock         _raw_spin_lock_irqsave #12
+         |
+         --- _raw_spin_lock_irqsave
+            |
+            |--%50.00-- trace_pid_list_is_set  # 6
+            |
+            |--%16.67-- try_to_wake_up  # 2
+            |            |
+            |            |--%50.00-- wake_up_q  # 1
+            |            |          futex_wake
+            |            |
+            |            |--%50.00-- default_wake_function  # 1
+            |                       autoremove_wake_function
+            |                       __wake_up_common
+            |                       __wake_up_common_lock
+            |                       __wake_up
+            |                       rb_wake_up_waiters
+            |
+            |--%16.67-- __wake_up_common_lock  # 2
+            |          __wake_up
+            |          rb_wake_up_waiters
+            |
+            |--%8.33-- cgroup_rstat_updated  # 1
+            |          __cgroup_account_cputime
+            |          update_curr
+            |          dequeue_entity
+            |          dequeue_task_fair
+            |          dequeue_task
+            |
+            |--%8.33-- hrtimer_start_range_ns  # 1
+                       do_nanosleep
+                       hrtimer_nanosleep
+                       __x64_sys_nanosleep
+                       do_syscall_64
+
+  %5.67  (29041) httpmock              __rcu_read_unlock #11
+         |
+         --- __rcu_read_unlock
+            |
+            |--%27.27-- __fget_light  # 3
+            |            |
+            |            |--%66.67-- __fdget_pos  # 2
+            |            |          ksys_read
+            |            |          __x64_sys_read
+            |            |          do_syscall_64
+            |            |
+            |            |--%33.33-- __fdget  # 1
+            |                       do_epoll_wait
+            |                       do_compat_epoll_pwait.part.0
+            |
+            |--%18.18-- aa_file_perm  # 2
+            |          apparmor_file_permission
+            |          security_file_permission
+            |          rw_verify_area
+            |          vfs_read
+            |          ksys_read
+            |          __x64_sys_read
+            |          do_syscall_64
+            |
+            |--%18.18-- select_task_rq_fair  # 2
+            |          try_to_wake_up
+            |
+            |--%18.18-- __update_idle_core  # 2
+            |          pick_next_task_idle
+            |          pick_next_task
+            |          __schedule
+            |
+            |--%18.18-- newidle_balance  # 2
+                       pick_next_task_fair
+                       pick_next_task
+                       __schedule
+
+  %5.67  (29041) httpmock                __rcu_read_lock #11
+         |
+         --- __rcu_read_lock
+            |
+            |--%27.27-- __fget_light  # 3
+            |            |
+            |            |--%66.67-- __fdget_pos  # 2
+            |            |          ksys_read
+            |            |          __x64_sys_read
+            |            |          do_syscall_64
+            |            |
+            |            |--%33.33-- __fdget  # 1
+            |                       do_epoll_wait
+            |                       do_compat_epoll_pwait.part.0
+            |
+            |--%18.18-- aa_file_perm  # 2
+            |          apparmor_file_permission
+            |          security_file_permission
+            |          rw_verify_area
+            |          vfs_read
+            |          ksys_read
+            |          __x64_sys_read
+            |          do_syscall_64
+            |
+            |--%18.18-- select_task_rq_fair  # 2
+            |          try_to_wake_up
+            |
+            |--%18.18-- __update_idle_core  # 2
+            |          pick_next_task_idle
+            |          pick_next_task
+            |          __schedule
+            |
+            |--%18.18-- newidle_balance  # 2
+                       pick_next_task_fair
+                       pick_next_task
+                       __schedule
+
+  %4.12  (29041) httpmock                   record_times #8
+         |
+         --- record_times
+          psi_group_change
+          psi_task_switch
+          __schedule
+
+  %4.12  (29041) httpmock            update_min_vruntime #8
+         |
+         --- update_min_vruntime
+            |
+            |--%50.00-- dequeue_entity  # 4
+            |
+            |--%50.00-- update_curr  # 4
+                       dequeue_entity
+                       dequeue_task_fair
+                       dequeue_task
+
+  %3.09  (29041) httpmock             available_idle_cpu #6
+         |
+         --- available_idle_cpu
+            |
+            |--%66.67-- wake_affine  # 4
+            |          select_task_rq_fair
+            |          try_to_wake_up
+            |
+            |--%33.33-- select_idle_sibling  # 2
+                       select_task_rq_fair
+                       try_to_wake_up
+
+  %3.09  (29041) httpmock fpregs_assert_state_consistent #6
+         |
+         --- fpregs_assert_state_consistent
+          exit_to_user_mode_prepare
+          syscall_exit_to_user_mode
+
+  %2.58  (29041) httpmock                 __cond_resched #5
+         |
+         --- __cond_resched
+            |
+            |--%40.00-- lock_sock_nested  # 2
+            |          tcp_recvmsg
+            |          inet6_recvmsg
+            |          sock_recvmsg
+            |          sock_read_iter
+            |          vfs_read
+            |          ksys_read
+            |          __x64_sys_read
+            |          do_syscall_64
+            |
+            |--%40.00-- aa_sk_perm  # 2
+            |          apparmor_socket_recvmsg
+            |          security_socket_recvmsg
+            |          sock_recvmsg
+            |          sock_read_iter
+            |          vfs_read
+            |          ksys_read
+            |          __x64_sys_read
+            |          do_syscall_64
+            |
+            |--%20.00-- mutex_lock  # 1
+                       ep_send_events
+                       ep_poll
+                       do_epoll_wait
+                       do_compat_epoll_pwait.part.0
+
+  %2.06  (29041) httpmock           __local_bh_enable_ip #4
+         |
+         --- __local_bh_enable_ip
+            |
+            |--%100.00-- _raw_spin_unlock_bh  # 4
+                         |
+                         |--%50.00-- release_sock  # 2
+                         |          tcp_recvmsg
+                         |          inet6_recvmsg
+                         |          sock_recvmsg
+                         |          sock_read_iter
+                         |          vfs_read
+                         |          ksys_read
+                         |          __x64_sys_read
+                         |          do_syscall_64
+                         |
+                         |--%50.00-- lock_sock_nested  # 2
+                                    tcp_recvmsg
+                                    inet6_recvmsg
+                                    sock_recvmsg
+                                    sock_read_iter
+                                    vfs_read
+                                    ksys_read
+                                    __x64_sys_read
+                                    do_syscall_64
+
+  %2.06  (29041) httpmock              _raw_spin_lock_bh #4
+         |
+         --- _raw_spin_lock_bh
+            |
+            |--%50.00-- release_sock  # 2
+            |          tcp_recvmsg
+            |          inet6_recvmsg
+            |          sock_recvmsg
+            |          sock_read_iter
+            |          vfs_read
+            |          ksys_read
+            |          __x64_sys_read
+            |          do_syscall_64
+            |
+            |--%50.00-- lock_sock_nested  # 2
+                       tcp_recvmsg
+                       inet6_recvmsg
+                       sock_recvmsg
+                       sock_read_iter
+                       vfs_read
+                       ksys_read
+                       __x64_sys_read
+                       do_syscall_64
+
+  %2.06  (29041) httpmock            check_spread.isra.0 #4
+         |
+         --- check_spread.isra.0
+          put_prev_entity
+          put_prev_task_fair
+          pick_next_task
+          __schedule
+
+  %2.06  (29041) httpmock           check_cfs_rq_runtime #4
+         |
+         --- check_cfs_rq_runtime
+          put_prev_entity
+          put_prev_task_fair
+          pick_next_task
+          __schedule
+
+  %2.06  (29041) httpmock                  clear_buddies #4
+         |
+         --- clear_buddies
+          dequeue_entity
+
+  %2.06  (29041) httpmock       __update_load_avg_cfs_rq #4
+         |
+         --- __update_load_avg_cfs_rq
+          update_load_avg
+
+  %2.06  (29041) httpmock           __update_load_avg_se #4
+         |
+         --- __update_load_avg_se
+          update_load_avg
+
+  %2.06  (29041) httpmock                 _raw_spin_lock #4
+         |
+         --- _raw_spin_lock
+            |
+            |--%50.00-- raw_spin_rq_lock_nested  # 2
+            |          __schedule
+            |
+            |--%25.00-- futex_q_lock  # 1
+            |          futex_wait_setup
+            |          futex_wait
+            |          do_futex
+            |          __x64_sys_futex
+            |          do_syscall_64
+            |
+            |--%25.00-- futex_wake  # 1
+                       do_futex
+                       __x64_sys_futex
+                       do_syscall_64
+
+  %2.06  (29041) httpmock               _raw_spin_unlock #4
+         |
+         --- _raw_spin_unlock
+            |
+            |--%50.00-- raw_spin_rq_unlock  # 2
+            |          finish_task_switch.isra.0
+            |          __schedule
+            |
+            |--%25.00-- futex_wait_queue  # 1
+            |          futex_wait
+            |          do_futex
+            |          __x64_sys_futex
+            |          do_syscall_64
+            |
+            |--%25.00-- futex_wake  # 1
+
+  %1.55  (29041) httpmock                           fput #3
+         |
+         --- fput
+            |
+            |--%66.67-- ksys_read  # 2
+            |          __x64_sys_read
+            |          do_syscall_64
+            |
+            |--%33.33-- do_epoll_wait  # 1
+                       do_compat_epoll_pwait.part.0
+
+  %1.03  (29041) httpmock                 tcp_release_cb #2
+         |
+         --- tcp_release_cb
+          release_sock
+          tcp_recvmsg
+          inet6_recvmsg
+          sock_recvmsg
+          sock_read_iter
+          vfs_read
+          ksys_read
+          __x64_sys_read
+          do_syscall_64
+
+  %1.03  (29041) httpmock             __tcp_cleanup_rbuf #2
+         |
+         --- __tcp_cleanup_rbuf
+          tcp_cleanup_rbuf
+          tcp_recvmsg_locked
+          tcp_recvmsg
+          inet6_recvmsg
+          sock_recvmsg
+          sock_read_iter
+          vfs_read
+          ksys_read
+          __x64_sys_read
+          do_syscall_64
+
+  %1.03  (29041) httpmock              __get_task_ioprio #2
+         |
+         --- __get_task_ioprio
+          vfs_read
+          ksys_read
+          __x64_sys_read
+          do_syscall_64
+
+  %1.03  (29041) httpmock  call_function_single_prep_ipi #2
+         |
+         --- call_function_single_prep_ipi
+          __smp_call_single_queue
+          ttwu_queue_wakelist
+          try_to_wake_up
+
+  %1.03  (29041) httpmock       __traceiter_sched_waking #2
+         |
+         --- __traceiter_sched_waking
+            |
+            |--%100.00-- try_to_wake_up  # 2
+                         |
+                         |--%50.00-- wake_up_q  # 1
+                         |          futex_wake
+                         |
+                         |--%50.00-- default_wake_function  # 1
+                                    autoremove_wake_function
+                                    __wake_up_common
+                                    __wake_up_common_lock
+                                    __wake_up
+                                    rb_wake_up_waiters
+
+  %1.03  (29041) httpmock                     futex_hash #2
+         |
+         --- futex_hash
+            |
+            |--%50.00-- futex_q_lock  # 1
+            |          futex_wait_setup
+            |          futex_wait
+            |          do_futex
+            |          __x64_sys_futex
+            |          do_syscall_64
+            |
+            |--%50.00-- futex_wake  # 1
+                       do_futex
+                       __x64_sys_futex
+                       do_syscall_64
+
+  %1.03  (29041) httpmock                  get_futex_key #2
+         |
+         --- get_futex_key
+            |
+            |--%50.00-- futex_wait_setup  # 1
+            |          futex_wait
+            |          do_futex
+            |          __x64_sys_futex
+            |          do_syscall_64
+            |
+            |--%50.00-- futex_wake  # 1
+                       do_futex
+                       __x64_sys_futex
+                       do_syscall_64
+
+  %1.03  (29041) httpmock       __traceiter_sched_switch #2
+         |
+         --- __traceiter_sched_switch
+          __schedule
+
+  %1.03  (29041) httpmock               psi_flags_change #2
+         |
+         --- psi_flags_change
+          psi_task_switch
+          __schedule
+
+  %1.03  (29041) httpmock             __msecs_to_jiffies #2
+         |
+         --- __msecs_to_jiffies
+          newidle_balance
+          pick_next_task_fair
+          pick_next_task
+          __schedule
+
+  %1.03  (29041) httpmock                  hrtick_update #2
+         |
+         --- hrtick_update
+          dequeue_task_fair
+
+  %1.03  (29041) httpmock                reweight_entity #2
+         |
+         --- reweight_entity
+          update_cfs_group
+          dequeue_entity
+
+  %1.03  (29041) httpmock                   __calc_delta #2
+         |
+         --- __calc_delta
+          update_curr
+          dequeue_entity
+          dequeue_task_fair
+
+  %1.03  (29041) httpmock               update_cfs_group #2
+         |
+         --- update_cfs_group
+          dequeue_entity
+
+  %1.03  (29041) httpmock                 cpuacct_charge #2
+         |
+         --- cpuacct_charge
+          update_curr
+          dequeue_entity
+          dequeue_task_fair
+          dequeue_task
+
+  %1.03  (29041) httpmock                update_rq_clock #2
+         |
+         --- update_rq_clock
+          __schedule
+
+  %1.03  (29041) httpmock        rcu_note_context_switch #2
+         |
+         --- rcu_note_context_switch
+          __schedule
+
+  %1.03  (29041) httpmock                       schedule #2
+         |
+         --- schedule
+            |
+            |--%50.00-- futex_wait_queue  # 1
+            |          futex_wait
+            |          do_futex
+            |          __x64_sys_futex
+            |          do_syscall_64
+            |
+            |--%50.00-- do_nanosleep  # 1
+                       hrtimer_nanosleep
+                       __x64_sys_nanosleep
+                       do_syscall_64
+
+  %1.03  (29041) httpmock                      ktime_get #2
+         |
+         --- ktime_get
+            |
+            |--%50.00-- clockevents_program_event  # 1
+            |          tick_program_event
+            |          hrtimer_reprogram
+            |          hrtimer_start_range_ns
+            |          do_nanosleep
+            |          hrtimer_nanosleep
+            |          __x64_sys_nanosleep
+            |          do_syscall_64
+            |
+            |--%50.00-- __hrtimer_start_range_ns  # 1
+                       hrtimer_start_range_ns
+                       do_nanosleep
+                       hrtimer_nanosleep
+                       __x64_sys_nanosleep
+                       do_syscall_64
+
+  %1.03  (29041) httpmock          _raw_write_unlock_irq #2
+         |
+         --- _raw_write_unlock_irq
+            |
+            |--%50.00-- ep_done_scan  # 1
+            |          ep_send_events
+            |          ep_poll
+            |          do_epoll_wait
+            |          do_compat_epoll_pwait.part.0
+            |
+            |--%50.00-- ep_send_events  # 1
+                       ep_poll
+                       do_epoll_wait
+                       do_compat_epoll_pwait.part.0
+
+  %1.03  (29041) httpmock            _raw_write_lock_irq #2
+         |
+         --- _raw_write_lock_irq
+            |
+            |--%50.00-- ep_done_scan  # 1
+            |          ep_send_events
+            |          ep_poll
+            |          do_epoll_wait
+            |          do_compat_epoll_pwait.part.0
+            |
+            |--%50.00-- ep_send_events  # 1
+                       ep_poll
+                       do_epoll_wait
+                       do_compat_epoll_pwait.part.0
+
+  %1.03  (29041) httpmock             xfd_validate_state #2
+         |
+         --- xfd_validate_state
+          restore_fpregs_from_fpstate
+          switch_fpu_return
+          exit_to_user_mode_prepare
+          syscall_exit_to_user_mode
+
+  %1.03  (29041) httpmock        rseq_update_cpu_node_id #2
+         |
+         --- rseq_update_cpu_node_id
+          __rseq_handle_notify_resume
+          exit_to_user_mode_loop
+          exit_to_user_mode_prepare
+          syscall_exit_to_user_mode
+
+  %1.03  (29041) httpmock               rseq_get_rseq_cs #2
+         |
+         --- rseq_get_rseq_cs
+          rseq_ip_fixup
+          __rseq_handle_notify_resume
+          exit_to_user_mode_loop
+          exit_to_user_mode_prepare
+          syscall_exit_to_user_mode
+
+  %1.03  (29041) httpmock   blkcg_maybe_throttle_current #2
+         |
+         --- blkcg_maybe_throttle_current
+          exit_to_user_mode_loop
+          exit_to_user_mode_prepare
+          syscall_exit_to_user_mode
+
+  %1.03  (29041) httpmock    mem_cgroup_handle_over_high #2
+         |
+         --- mem_cgroup_handle_over_high
+          exit_to_user_mode_loop
+          exit_to_user_mode_prepare
+          syscall_exit_to_user_mode
+
+  %0.52  (29041) httpmock           cgroup_rstat_updated #1
+         |
+         --- cgroup_rstat_updated
+          __cgroup_account_cputime
+          update_curr
+          dequeue_entity
+          dequeue_task_fair
+          dequeue_task
+
+  %0.52  (29041) httpmock                  __futex_queue #1
+         |
+         --- __futex_queue
+          futex_wait_queue
+          futex_wait
+          do_futex
+          __x64_sys_futex
+          do_syscall_64
+
+  %0.52  (29041) httpmock         futex_get_value_locked #1
+         |
+         --- futex_get_value_locked
+          futex_wait_setup
+          futex_wait
+          do_futex
+          __x64_sys_futex
+          do_syscall_64
+
+  %0.52  (29041) httpmock              futex_setup_timer #1
+         |
+         --- futex_setup_timer
+          futex_wait
+          do_futex
+          __x64_sys_futex
+          do_syscall_64
+
+  %0.52  (29041) httpmock                wake_q_add_safe #1
+         |
+         --- wake_q_add_safe
+          futex_wake_mark
+
+  %0.52  (29041) httpmock                       idle_cpu #1
+         |
+         --- idle_cpu
+          __irq_exit_rcu
+
+  %0.52  (29041) httpmock                   irq_exit_rcu #1
+         |
+         --- irq_exit_rcu
+          sysvec_irq_work
+
+  %0.52  (29041) httpmock               __wake_up_common #1
+         |
+         --- __wake_up_common
+          __wake_up_common_lock
+          __wake_up
+          rb_wake_up_waiters
+
+  %0.52  (29041) httpmock              __sysvec_irq_work #1
+         |
+         --- __sysvec_irq_work
+          sysvec_irq_work
+
+  %0.52  (29041) httpmock                  irq_enter_rcu #1
+         |
+         --- irq_enter_rcu
+          sysvec_irq_work
+
+  %0.52  (29041) httpmock           x2apic_send_IPI_self #1
+         |
+         --- x2apic_send_IPI_self
+          arch_irq_work_raise
+          __irq_work_queue_local
+
+  %0.52  (29041) httpmock                __futex_unqueue #1
+         |
+         --- __futex_unqueue
+          futex_wake_mark
+          futex_wake
+          do_futex
+          __x64_sys_futex
+          do_syscall_64
+
+  %0.52  (29041) httpmock                 hrtimer_active #1
+         |
+         --- hrtimer_active
+          hrtimer_try_to_cancel
+          do_nanosleep
+
+  %0.52  (29041) httpmock            lapic_next_deadline #1
+         |
+         --- lapic_next_deadline
+          clockevents_program_event
+          tick_program_event
+          hrtimer_reprogram
+          hrtimer_start_range_ns
+          do_nanosleep
+          hrtimer_nanosleep
+          __x64_sys_nanosleep
+          do_syscall_64
+
+  %0.52  (29041) httpmock                enqueue_hrtimer #1
+         |
+         --- enqueue_hrtimer
+          __hrtimer_start_range_ns
+          hrtimer_start_range_ns
+          do_nanosleep
+          hrtimer_nanosleep
+          __x64_sys_nanosleep
+          do_syscall_64
+
+  %0.52  (29041) httpmock          get_nohz_timer_target #1
+         |
+         --- get_nohz_timer_target
+          __hrtimer_start_range_ns
+          hrtimer_start_range_ns
+          do_nanosleep
+          hrtimer_nanosleep
+          __x64_sys_nanosleep
+          do_syscall_64
+
+  %0.52  (29041) httpmock                 __hrtimer_init #1
+         |
+         --- __hrtimer_init
+          hrtimer_nanosleep
+          __x64_sys_nanosleep
+          do_syscall_64
+
+  %0.52  (29041) httpmock                 get_timespec64 #1
+         |
+         --- get_timespec64
+          __x64_sys_nanosleep
+          do_syscall_64
+
+  %0.52  (29041) httpmock                   mutex_unlock #1
+         |
+         --- mutex_unlock
+          ep_send_events
+          ep_poll
+          do_epoll_wait
+          do_compat_epoll_pwait.part.0
+
+  %0.52  (29041) httpmock                     __pm_relax #1
+         |
+         --- __pm_relax
+          ep_done_scan
+          ep_send_events
+          ep_poll
+          do_epoll_wait
+          do_compat_epoll_pwait.part.0
+
+  %0.52  (29041) httpmock         tcp_stream_memory_free #1
+         |
+         --- tcp_stream_memory_free
+          tcp_poll
+          sock_poll
+          ep_item_poll.isra.0
+          ep_send_events
+          ep_poll
+          do_epoll_wait
+          do_compat_epoll_pwait.part.0
+
+  %0.52  (29041) httpmock          do_epoll_pwait.part.0 #1
+         |
+         --- do_epoll_pwait.part.0
+          __x64_sys_epoll_pwait
+          do_syscall_64
+
+  %0.52  (29041) httpmock               set_user_sigmask #1
+         |
+         --- set_user_sigmask
+          __x64_sys_epoll_pwait
+          do_syscall_64
+
+  %0.52  (29041) httpmock                  futex_unqueue #1
+         |
+         --- futex_unqueue
+          futex_wait
