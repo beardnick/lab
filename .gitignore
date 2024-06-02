@@ -1,5 +1,6 @@
 .idea
-
 config.toml
-
 .vscode
+node_modules
+*.pcap
+.DS_Store
