@@ -9,6 +9,13 @@ func RegisterRouters(router *gin.Engine) {
 	router.GET("/production/cnt", GetProductionCntHandler)
 	router.GET("/order", GetOrderHandler)
 	router.POST("/order", CreateOrderHandler)
+	router.GET("/data/check", CheckDataHandler)
+}
+
+func CheckDataHandler(c *gin.Context) {
+	productionId := c.Query("production_id")
+	result, err := Check(productionId)
+	ErrOrSuccessResponse(c, result, UnknownErr.OfErr(err))
 }
 
 func CreateOrderHandler(c *gin.Context) {

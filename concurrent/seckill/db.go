@@ -1,10 +1,55 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
+
 	"github.com/go-redis/redis"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
+
+var defaultRedisClient *redis.Client
+var defaultMysqlClient *gorm.DB
+var subScriptSha string
+
+const subScript = `
+local cnt = tonumber(redis.call('HGET', KEYS[1], ARGV[1]))
+local sub = tonumber(ARGV[2])
+
+if sub > cnt then
+    return redis.error_reply("Subtract number is larger than count")
+else
+    cnt = cnt - sub
+    redis.call('HSET', KEYS[1], ARGV[1], cnt)
+    return cnt
+end
+`
+
+func SetupDB(conf Config) (err error) {
+	c := conf.Redis
+	defaultRedisClient, err = OpenRedis(c.Addr, c.Passwd, c.Db)
+	if err != nil {
+		return
+	}
+	err = setupRedis(defaultRedisClient)
+	if err != nil {
+		return
+	}
+	defaultMysqlClient, err = OpenDb(Conf().Mysql)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func setupRedis(rdb *redis.Client) (err error) {
+	sha1 := sha1.New()
+	sha1.Write([]byte(subScript))
+	subScriptSha = hex.EncodeToString(sha1.Sum(nil))
+	rdb.ScriptLoad(subScript)
+	return
+}
 
 // todo: use db pool
 func OpenDb(dsn string) (db *gorm.DB, err error) {
@@ -13,7 +58,7 @@ func OpenDb(dsn string) (db *gorm.DB, err error) {
 }
 
 func DefaultDB() (db *gorm.DB, err error) {
-	return OpenDb(Conf().Mysql)
+	return defaultMysqlClient, nil
 }
 
 func OpenRedis(addr, passwd string, db int) (rdb *redis.Client, err error) {
@@ -27,6 +72,5 @@ func OpenRedis(addr, passwd string, db int) (rdb *redis.Client, err error) {
 }
 
 func DefaultRedis() (rdb *redis.Client, err error) {
-	c := config.Redis
-	return OpenRedis(c.Addr, c.Passwd, c.Db)
+	return defaultRedisClient, nil
 }

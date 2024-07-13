@@ -28,3 +28,8 @@ func (p OrderDao) Insert(order Order) (id string, err error) {
 	err = p.db.Create(&order).Error
 	return
 }
+
+func (p OrderDao) OrderSum(productionId string) (cnt int, err error) {
+	err = p.db.Table("orders").Select("sum(cnt)").Where("production_id = ?", productionId).Scan(&cnt).Error
+	return
+}

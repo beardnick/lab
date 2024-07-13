@@ -1,27 +1,16 @@
 package main
 
-import (
-	"errors"
-	"fmt"
-)
-
 func CreateOrder(order Order) (id string, err error) {
 	p := NewProductionDao()
 	// todo 计数不对，先查库存，然后再减库存不是原子操作
-	left, err := p.CacheCntOf(order.Production)
+	_, err = p.SubCnt(order.ProductionId, order.Cnt)
 	if err != nil {
-		return
-	}
-	if left < order.Cnt {
-		err = errors.New(fmt.Sprintf("库存不足，仅剩%d件", left))
 		return
 	}
 	id, err = NewOrderDao().Insert(order)
 	if err != nil {
 		return
 	}
-	err = p.CacheCnt(order.Production, left-order.Cnt)
-	// todo 异步修改数据库
 	return
 }
 
@@ -32,5 +21,31 @@ func CreateProduction(production Production) (id string, err error) {
 		return
 	}
 	err = p.CacheCnt(id, production.Cnt)
+	return
+}
+
+func Check(productionId string) (result CheckResult, err error) {
+	p := NewProductionDao()
+	// todo 计数不对，先查库存，然后再减库存不是原子操作
+	left, err := p.CacheCntOf(productionId)
+	if err != nil {
+		return
+	}
+	orderDao := NewOrderDao()
+	ordered, err := orderDao.OrderSum(productionId)
+	if err != nil {
+		return
+	}
+	cnt, err := p.GetProductionCnt(productionId)
+	if err != nil {
+		return
+	}
+	result = CheckResult{
+		Left:         left,
+		Ordered:      ordered,
+		CalCnt:       left + ordered,
+		RealCnt:      cnt,
+		ProductionId: productionId,
+	}
 	return
 }

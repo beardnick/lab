@@ -14,9 +14,21 @@ type Production struct {
 }
 
 type Order struct {
-	ID         uint   `json:"id" gorm:"primaryKey"`
-	Guid       string `json:"guid" gorm:"size:128"`
-	UserName   string `json:"user_name" gorm:"size:128"`
-	Production string `json:"production"`
-	Cnt        int    `json:"cnt"`
+	ID           uint   `json:"id" gorm:"primaryKey"`
+	Guid         string `json:"guid" gorm:"size:128"`
+	UserName     string `json:"user_name" gorm:"size:128"`
+	ProductionId string `json:"production_id"`
+	Cnt          int    `json:"cnt"`
+}
+
+type CheckResult struct {
+	Left         int    `json:"left,omitempty"`
+	Ordered      int    `json:"ordered,omitempty"`
+	CalCnt       int    `json:"cal_cnt,omitempty"`
+	RealCnt      int    `json:"real_cnt,omitempty"`
+	ProductionId string `json:"production_id,omitempty"`
+}
+
+type CheckReq struct {
+	ProductionId string `json:"production_id"`
 }

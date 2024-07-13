@@ -22,7 +22,8 @@ func InitConfig() (err error) {
 }
 
 func InitDb() (err error) {
-	db, err := OpenDb(Conf().Mysql)
+	SetupDB(config)
+	db, err := DefaultDB()
 	if err != nil {
 		return
 	}

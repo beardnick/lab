@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strconv"
+
 	"github.com/go-redis/redis"
 	"gorm.io/gorm"
 )
@@ -60,5 +62,16 @@ func (p ProductionDao) CacheCnt(production string, cnt int) (err error) {
 
 func (p ProductionDao) CacheCntOf(production string) (cnt int, err error) {
 	cnt, err = p.rdb.HGet(p.cnt(), production).Int()
+	return
+}
+
+func (p ProductionDao) SubCnt(production string, orderCnt int) (cnt int, err error) {
+	cnt, err = p.rdb.EvalSha(
+		subScriptSha,
+		[]string{p.cnt()},
+		[]string{
+			production,
+			strconv.FormatInt(int64(orderCnt), 10)},
+	).Int()
 	return
 }
