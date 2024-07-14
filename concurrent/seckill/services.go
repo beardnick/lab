@@ -2,7 +2,6 @@ package main
 
 func CreateOrder(order Order) (id string, err error) {
 	p := NewProductionDao()
-	// todo 计数不对，先查库存，然后再减库存不是原子操作
 	_, err = p.SubCnt(order.ProductionId, order.Cnt)
 	if err != nil {
 		return

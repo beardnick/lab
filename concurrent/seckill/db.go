@@ -11,6 +11,7 @@ import (
 
 var defaultRedisClient *redis.Client
 var defaultMysqlClient *gorm.DB
+var defaultKafkaClient *KafkaProvicder
 var subScriptSha string
 
 const subScript = `
@@ -40,6 +41,16 @@ func SetupDB(conf Config) (err error) {
 	if err != nil {
 		return
 	}
+	defaultKafkaClient = NewKafkaProvider(conf.Kafka.Brokers)
+	return
+}
+
+func SetupService() (err error) {
+	err = SetupOrderDao()
+	if err != nil {
+		return
+	}
+	err = NewOrderDao().StartConsumeEvents()
 	return
 }
 
@@ -51,7 +62,6 @@ func setupRedis(rdb *redis.Client) (err error) {
 	return
 }
 
-// todo: use db pool
 func OpenDb(dsn string) (db *gorm.DB, err error) {
 	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	return
@@ -73,4 +83,8 @@ func OpenRedis(addr, passwd string, db int) (rdb *redis.Client, err error) {
 
 func DefaultRedis() (rdb *redis.Client, err error) {
 	return defaultRedisClient, nil
+}
+
+func DefaultKafka() (client *KafkaProvicder) {
+	return defaultKafkaClient
 }

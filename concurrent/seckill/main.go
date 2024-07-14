@@ -34,6 +34,7 @@ func InitDb() (err error) {
 			return
 		}
 	}
+	err = SetupService()
 	return
 }
 
