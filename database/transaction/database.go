@@ -11,6 +11,81 @@ import (
 	"github.com/samber/lo"
 )
 
+type Server struct {
+	database *DataBase
+	address  string
+}
+
+func (s *Server) Handle(conn net.Conn) {
+	defer conn.Close()
+	buf := make([]byte, 1024)
+	var trans *Trans = nil
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		command := strings.Split(strings.TrimSpace(string(buf[:n])), " ")
+		switch command[0] {
+		case "exit":
+			break
+		case "set":
+			if trans == nil {
+				trans = s.database.TransBegin(false)
+				trans.
+					Set(command[1], command[2]).
+					Commit()
+				trans = nil
+				continue
+			}
+			trans.Set(command[1], command[2])
+		case "get":
+			if trans == nil {
+				trans = s.database.TransBegin(true)
+				value := trans.Get(command[1])
+				trans = nil
+				conn.Write([]byte(fmt.Sprintln(value)))
+				continue
+			}
+			value := trans.Get(command[1])
+			conn.Write([]byte(fmt.Sprintln(value)))
+		case "begin":
+			trans = s.database.TransBegin(false)
+		case "commit":
+			if trans == nil {
+				conn.Write([]byte(fmt.Sprintln("no trans")))
+				continue
+			}
+			trans.Commit()
+			trans = nil
+		}
+	}
+}
+
+func (s *Server) Start() {
+	s.database = &DataBase{
+		version:          0,
+		dataMutex:        sync.Mutex{},
+		data:             map[string]Record{},
+		uncommittedMutex: sync.Mutex{},
+		uncommittedTrans: []Trans{},
+	}
+	l, err := net.Listen("tcp", s.address)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		go handle(conn)
+	}
+
+}
+
 type RecordLog struct {
 	data string
 	tx   int
@@ -166,77 +241,4 @@ func (d *DataBase) ReadView() ReadView {
 	view.uncommittedTrans = append(view.uncommittedTrans, d.uncommittedTrans...)
 	d.uncommittedMutex.Unlock()
 	return view
-}
-
-var database *DataBase
-
-func server() {
-	database = &DataBase{
-		version:          0,
-		dataMutex:        sync.Mutex{},
-		data:             map[string]Record{},
-		uncommittedMutex: sync.Mutex{},
-		uncommittedTrans: []Trans{},
-	}
-	l, err := net.Listen("tcp", ":19090")
-	if err != nil {
-		log.Fatalln(err)
-	}
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		go handle(conn)
-	}
-
-}
-
-func handle(conn net.Conn) {
-	defer conn.Close()
-	buf := make([]byte, 1024)
-	var trans *Trans = nil
-	for {
-		n, err := conn.Read(buf)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		command := strings.Split(strings.TrimSpace(string(buf[:n])), " ")
-		switch command[0] {
-		case "exit":
-			break
-		case "set":
-			if trans == nil {
-				trans = database.TransBegin(false)
-				trans.
-					Set(command[1], command[2]).
-					Commit()
-				trans = nil
-				continue
-			}
-			trans.Set(command[1], command[2])
-		case "get":
-			if trans == nil {
-				trans = database.TransBegin(true)
-				value := trans.Get(command[1])
-				trans = nil
-				conn.Write([]byte(fmt.Sprintln(value)))
-				continue
-			}
-			value := trans.Get(command[1])
-			conn.Write([]byte(fmt.Sprintln(value)))
-		case "begin":
-			trans = database.TransBegin(false)
-		case "commit":
-			if trans == nil {
-				conn.Write([]byte(fmt.Sprintln("no trans")))
-				continue
-			}
-			trans.Commit()
-			trans = nil
-		}
-	}
-
 }
