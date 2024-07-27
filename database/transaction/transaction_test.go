@@ -48,6 +48,12 @@ func (c *Client) Commit() (err error) {
 	_, err = c.conn.Write([]byte("commit\n"))
 	return
 }
+
+func (c *Client) Rollback() (err error) {
+	_, err = c.conn.Write([]byte("rollback\n"))
+	return
+}
+
 func (c *Client) Get(key string) (value string, err error) {
 	_, err = c.conn.Write([]byte(fmt.Sprintf("get %s\n", key)))
 	if err != nil {
@@ -140,7 +146,7 @@ func Test_TransCommit(t *testing.T) {
 	assert.Equal(t, "world", value)
 
 	// transaction have been committed
-	// should get world
+	// should get world1
 	assert.Nil(t, client1.Commit())
 	value, err = client1.Get("hello")
 	assert.Nil(t, err)
@@ -148,6 +154,48 @@ func Test_TransCommit(t *testing.T) {
 	value, err = client2.Get("hello")
 	assert.Nil(t, err)
 	assert.Equal(t, "world1", value)
+
+	stop()
+}
+
+func Test_TransRollback(t *testing.T) {
+	stop, server, err := createServer()
+	assert.Nil(t, err)
+	server.Start()
+
+	client1, err := CreateClient(server.address, time.Second)
+	assert.Nil(t, err)
+	client2, err := CreateClient(server.address, time.Second)
+	assert.Nil(t, err)
+
+	// set hello world, should get world
+	assert.Nil(t, client1.Set("hello", "world"))
+	value, err := client1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", value)
+
+	// set hello world1 in transaction, should get world1 in transaction
+	assert.Nil(t, client1.Begin())
+	assert.Nil(t, client1.Set("hello", "world1"))
+	value, err = client1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world1", value)
+
+	// transaction haven't been committed
+	// get hello from another transaction, should get world
+	value, err = client2.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", value)
+
+	// transaction have been rollbacked
+	// should get world
+	assert.Nil(t, client1.Rollback())
+	value, err = client1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", value)
+	value, err = client2.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "world", value)
 
 	stop()
 }

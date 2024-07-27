@@ -92,6 +92,13 @@ func (s *Session) HandleCommand(command []string) {
 		}
 		s.trans.Commit()
 		s.trans = nil
+	case "rollback":
+		if s.trans == nil {
+			s.conn.Write([]byte(fmt.Sprintln("no s.trans")))
+			break
+		}
+		s.trans.Rollback()
+		s.trans = nil
 	}
 	s.database.dataMutex.Lock()
 	for k, v := range s.database.data {
