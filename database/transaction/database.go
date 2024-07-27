@@ -16,19 +16,17 @@ import (
 type Server struct {
 	database *DataBase
 	address  string
-	ctx      context.Context
 }
 
-func (s *Server) Handle(conn net.Conn) {
-	sessCtx, cancel := context.WithCancel(s.ctx)
+func (s *Server) Handle(ctx context.Context, conn net.Conn) {
+	sessCtx, cancel := context.WithCancel(ctx)
 	sess := Session{
 		conn:     conn,
 		trans:    nil,
 		database: s.database,
-		ctx:      sessCtx,
 		stopCtx:  cancel,
 	}
-	sess.Handle()
+	sess.Handle(sessCtx)
 }
 
 func (s *Session) Close() (err error) {
@@ -36,12 +34,12 @@ func (s *Session) Close() (err error) {
 	return
 }
 
-func (s *Session) Handle() {
+func (s *Session) Handle(ctx context.Context) {
 	buf := make([]byte, 1024)
-	waitCloseCtx(s.ctx, s.conn)
+	waitCloseCtx(ctx, s.conn)
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -67,7 +65,6 @@ type Session struct {
 	trans    *Trans
 	database *DataBase
 	data     []byte
-	ctx      context.Context
 	stopCtx  context.CancelFunc
 }
 
@@ -125,11 +122,11 @@ func (s *Session) HandleCommand(command []string) {
 	s.database.dataMutex.Unlock()
 }
 
-func (s *Server) Start() {
-	go s.start()
+func (s *Server) Start(ctx context.Context) {
+	go s.start(ctx)
 }
 
-func (s *Server) start() {
+func (s *Server) start(ctx context.Context) {
 	s.database = &DataBase{
 		version:          0,
 		dataMutex:        sync.Mutex{},
@@ -142,10 +139,10 @@ func (s *Server) start() {
 		log.Fatalln(err)
 	}
 	defer l.Close()
-	waitCloseCtx(s.ctx, l)
+	waitCloseCtx(ctx, l)
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			break
 		default:
 		}
@@ -154,7 +151,7 @@ func (s *Server) start() {
 			log.Println(err)
 			continue
 		}
-		go s.Handle(conn)
+		go s.Handle(ctx, conn)
 	}
 
 }

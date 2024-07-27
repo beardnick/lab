@@ -68,15 +68,13 @@ func (c *Client) Get(key string) (value string, err error) {
 	return
 }
 
-func createServer() (stop context.CancelFunc, s *Server, err error) {
+func createServer() (s *Server, err error) {
 	port, err := GetFreePort()
 	if err != nil {
 		return
 	}
-	ctx, stop := context.WithCancel(context.Background())
 	s = &Server{
 		address: fmt.Sprintf("127.0.0.1:%d", port),
-		ctx:     ctx,
 	}
 	return
 }
@@ -95,9 +93,10 @@ func GetFreePort() (port int, err error) {
 }
 
 func Test_TransGetSet(t *testing.T) {
-	stop, server, err := createServer()
+	server, err := createServer()
 	assert.Nil(t, err)
-	server.Start()
+	ctx, stop := context.WithCancel(context.Background())
+	server.Start(ctx)
 
 	client, err := CreateClient(server.address, time.Second)
 	assert.Nil(t, err)
@@ -117,9 +116,10 @@ func Test_TransGetSet(t *testing.T) {
 }
 
 func Test_TransCommit(t *testing.T) {
-	stop, server, err := createServer()
+	server, err := createServer()
 	assert.Nil(t, err)
-	server.Start()
+	ctx, stop := context.WithCancel(context.Background())
+	server.Start(ctx)
 
 	client1, err := CreateClient(server.address, time.Second)
 	assert.Nil(t, err)
@@ -159,9 +159,10 @@ func Test_TransCommit(t *testing.T) {
 }
 
 func Test_TransRollback(t *testing.T) {
-	stop, server, err := createServer()
+	server, err := createServer()
 	assert.Nil(t, err)
-	server.Start()
+	ctx, stop := context.WithCancel(context.Background())
+	server.Start(ctx)
 
 	client1, err := CreateClient(server.address, time.Second)
 	assert.Nil(t, err)
