@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/samber/lo"
 )
@@ -14,56 +16,99 @@ import (
 type Server struct {
 	database *DataBase
 	address  string
+	ctx      context.Context
 }
 
 func (s *Server) Handle(conn net.Conn) {
-	defer conn.Close()
+	sess := Session{
+		conn:     conn,
+		trans:    nil,
+		database: s.database,
+	}
+	defer sess.conn.Close()
 	buf := make([]byte, 1024)
-	var trans *Trans = nil
+	waitClose(s.ctx, sess.conn)
 	for {
+		select {
+		case <-s.ctx.Done():
+			break
+		default:
+		}
 		n, err := conn.Read(buf)
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		command := strings.Split(strings.TrimSpace(string(buf[:n])), " ")
-		switch command[0] {
-		case "exit":
-			break
-		case "set":
-			if trans == nil {
-				trans = s.database.TransBegin(false)
-				trans.
-					Set(command[1], command[2]).
-					Commit()
-				trans = nil
-				continue
-			}
-			trans.Set(command[1], command[2])
-		case "get":
-			if trans == nil {
-				trans = s.database.TransBegin(true)
-				value := trans.Get(command[1])
-				trans = nil
-				conn.Write([]byte(fmt.Sprintln(value)))
-				continue
-			}
-			value := trans.Get(command[1])
-			conn.Write([]byte(fmt.Sprintln(value)))
-		case "begin":
-			trans = s.database.TransBegin(false)
-		case "commit":
-			if trans == nil {
-				conn.Write([]byte(fmt.Sprintln("no trans")))
-				continue
-			}
-			trans.Commit()
-			trans = nil
+		data := string(buf[:n])
+		datas := strings.Split(data, "\n")
+		commands := lo.Map(
+			datas,
+			func(item string, index int) []string { return strings.Split(item, " ") },
+		)
+		for _, v := range commands {
+			sess.HandleCommand(v)
 		}
 	}
 }
 
+type Session struct {
+	conn     net.Conn
+	trans    *Trans
+	database *DataBase
+	data     []byte
+}
+
+func (s *Session) HandleCommand(command []string) {
+	log.Printf("session:%v command %v", s.conn.RemoteAddr(), command)
+	switch command[0] {
+	case "exit":
+		break
+	case "set":
+		if s.trans == nil {
+			s.trans = s.database.TransBegin(false)
+			s.trans.
+				Set(command[1], command[2]).
+				Commit()
+			s.trans = nil
+			break
+		}
+		s.trans.Set(command[1], command[2])
+	case "get":
+		if s.trans == nil {
+			s.trans = s.database.TransBegin(true)
+			value := s.trans.Get(command[1])
+			s.trans = nil
+			s.conn.Write([]byte(fmt.Sprintln(value)))
+			break
+		}
+		value := s.trans.Get(command[1])
+		s.conn.Write([]byte(fmt.Sprintln(value)))
+	case "begin":
+		s.trans = s.database.TransBegin(false)
+	case "commit":
+		if s.trans == nil {
+			s.conn.Write([]byte(fmt.Sprintln("no s.trans")))
+			break
+		}
+		s.trans.Commit()
+		s.trans = nil
+	}
+	s.database.dataMutex.Lock()
+	for k, v := range s.database.data {
+		log.Println(k, v.versions)
+	}
+	txs := lo.Map[Trans, int](s.database.uncommittedTrans, func(item Trans, index int) int {
+		return item.tx
+	})
+	log.Println("uncommited", txs)
+	s.database.dataMutex.Unlock()
+}
+
 func (s *Server) Start() {
+	go s.start()
+}
+
+func (s *Server) start() {
 	s.database = &DataBase{
 		version:          0,
 		dataMutex:        sync.Mutex{},
@@ -75,13 +120,20 @@ func (s *Server) Start() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+	defer l.Close()
+	waitClose(s.ctx, l)
 	for {
+		select {
+		case <-s.ctx.Done():
+			break
+		default:
+		}
 		conn, err := l.Accept()
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		go handle(conn)
+		go s.Handle(conn)
 	}
 
 }
@@ -241,4 +293,22 @@ func (d *DataBase) ReadView() ReadView {
 	view.uncommittedTrans = append(view.uncommittedTrans, d.uncommittedTrans...)
 	d.uncommittedMutex.Unlock()
 	return view
+}
+
+type Closer interface {
+	Close() error
+}
+
+func waitClose(ctx context.Context, closer Closer) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				closer.Close()
+				break
+			default:
+				time.Sleep(time.Second)
+			}
+		}
+	}()
 }
