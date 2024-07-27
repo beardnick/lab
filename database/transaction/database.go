@@ -20,21 +20,32 @@ type Server struct {
 }
 
 func (s *Server) Handle(conn net.Conn) {
+	sessCtx, cancel := context.WithCancel(s.ctx)
 	sess := Session{
 		conn:     conn,
 		trans:    nil,
 		database: s.database,
+		ctx:      sessCtx,
+		stopCtx:  cancel,
 	}
-	defer sess.conn.Close()
+	sess.Handle()
+}
+
+func (s *Session) Close() (err error) {
+	s.stopCtx()
+	return
+}
+
+func (s *Session) Handle() {
 	buf := make([]byte, 1024)
-	waitClose(s.ctx, sess.conn)
+	waitCloseCtx(s.ctx, s.conn)
 	for {
 		select {
 		case <-s.ctx.Done():
-			break
+			return
 		default:
 		}
-		n, err := conn.Read(buf)
+		n, err := s.conn.Read(buf)
 		if err != nil {
 			log.Println(err)
 			continue
@@ -46,7 +57,7 @@ func (s *Server) Handle(conn net.Conn) {
 			func(item string, index int) []string { return strings.Split(item, " ") },
 		)
 		for _, v := range commands {
-			sess.HandleCommand(v)
+			s.HandleCommand(v)
 		}
 	}
 }
@@ -56,13 +67,16 @@ type Session struct {
 	trans    *Trans
 	database *DataBase
 	data     []byte
+	ctx      context.Context
+	stopCtx  context.CancelFunc
 }
 
 func (s *Session) HandleCommand(command []string) {
 	log.Printf("session:%v command %v", s.conn.RemoteAddr(), command)
 	switch command[0] {
 	case "exit":
-		break
+		s.Close()
+		return
 	case "set":
 		if s.trans == nil {
 			s.trans = s.database.TransBegin(false)
@@ -87,14 +101,14 @@ func (s *Session) HandleCommand(command []string) {
 		s.trans = s.database.TransBegin(false)
 	case "commit":
 		if s.trans == nil {
-			s.conn.Write([]byte(fmt.Sprintln("no s.trans")))
+			s.conn.Write([]byte(fmt.Sprintln("no trans")))
 			break
 		}
 		s.trans.Commit()
 		s.trans = nil
 	case "rollback":
 		if s.trans == nil {
-			s.conn.Write([]byte(fmt.Sprintln("no s.trans")))
+			s.conn.Write([]byte(fmt.Sprintln("no trans")))
 			break
 		}
 		s.trans.Rollback()
@@ -128,7 +142,7 @@ func (s *Server) start() {
 		log.Fatalln(err)
 	}
 	defer l.Close()
-	waitClose(s.ctx, l)
+	waitCloseCtx(s.ctx, l)
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -306,13 +320,13 @@ type Closer interface {
 	Close() error
 }
 
-func waitClose(ctx context.Context, closer Closer) {
+func waitCloseCtx(ctx context.Context, closer Closer) {
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				closer.Close()
-				break
+				return
 			default:
 				time.Sleep(time.Second)
 			}
