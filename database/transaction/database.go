@@ -115,14 +115,17 @@ func (s *Session) HandleCommand(command []string) {
 	for k, v := range s.database.data {
 		log.Println(k, v.versions)
 	}
-	txs := lo.Map[Trans, int](s.database.uncommittedTrans, func(item Trans, index int) int {
+	s.database.uncommittedMutex.Lock()
+	txs := lo.Map(s.database.uncommittedTrans, func(item Trans, index int) int {
 		return item.tx
 	})
+	s.database.uncommittedMutex.Unlock()
 	log.Println("uncommited", txs)
 	s.database.dataMutex.Unlock()
 }
 
 func (s *Server) Start(ctx context.Context) {
+	log.SetFlags(log.Llongfile)
 	go s.start(ctx)
 }
 
@@ -138,12 +141,11 @@ func (s *Server) start(ctx context.Context) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer l.Close()
 	waitCloseCtx(ctx, l)
 	for {
 		select {
 		case <-ctx.Done():
-			break
+			return
 		default:
 		}
 		conn, err := l.Accept()
