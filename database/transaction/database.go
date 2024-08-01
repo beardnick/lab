@@ -130,7 +130,7 @@ func (s *Server) start(ctx context.Context) {
 	s.database = &DataBase{
 		version:          0,
 		dataMutex:        sync.Mutex{},
-		data:             map[string]Record{},
+		data:             map[string]*Record{},
 		uncommittedMutex: sync.Mutex{},
 		uncommittedTrans: []Trans{},
 	}
@@ -169,7 +169,7 @@ type Record struct {
 type DataBase struct {
 	version          int32
 	dataMutex        sync.Mutex
-	data             map[string]Record
+	data             map[string]*Record
 	uncommittedMutex sync.Mutex
 	uncommittedTrans []Trans
 }
@@ -262,7 +262,7 @@ func (d *DataBase) TransRollback(t *Trans) (nt *Trans) {
 	}
 	d.uncommittedMutex.Unlock()
 	d.dataMutex.Lock()
-	records := lo.Map[string, Record](t.keys, func(item string, index int) Record { return d.data[item] })
+	records := lo.Map(t.keys, func(item string, index int) *Record { return d.data[item] })
 	d.dataMutex.Unlock()
 	for _, r := range records {
 		r.Lock()
@@ -282,7 +282,7 @@ func (d *DataBase) Set(key string, value RecordLog) {
 	v, ok := d.data[key]
 	d.dataMutex.Unlock()
 	if !ok {
-		v = Record{
+		v = &Record{
 			versions: []RecordLog{},
 			Mutex:    sync.Mutex{},
 		}
@@ -296,8 +296,8 @@ func (d *DataBase) Set(key string, value RecordLog) {
 	d.dataMutex.Unlock()
 }
 
-func (d *DataBase) Get(key string) (Record, bool) {
-	r := Record{}
+func (d *DataBase) Get(key string) (*Record, bool) {
+	var r *Record
 	ok := false
 	d.dataMutex.Lock()
 	r, ok = d.data[key]
