@@ -69,7 +69,6 @@ type Session struct {
 }
 
 func (s *Session) HandleCommand(command []string) {
-	log.Printf("session:%v command %v", s.conn.RemoteAddr(), command)
 	switch command[0] {
 	case "exit":
 		s.Close()
@@ -111,17 +110,6 @@ func (s *Session) HandleCommand(command []string) {
 		s.trans.Rollback()
 		s.trans = nil
 	}
-	s.database.dataMutex.Lock()
-	for k, v := range s.database.data {
-		log.Println(k, v.versions)
-	}
-	s.database.uncommittedMutex.Lock()
-	txs := lo.Map(s.database.uncommittedTrans, func(item Trans, index int) int {
-		return item.tx
-	})
-	s.database.uncommittedMutex.Unlock()
-	log.Println("uncommited", txs)
-	s.database.dataMutex.Unlock()
 }
 
 func (s *Server) Start(ctx context.Context) {
