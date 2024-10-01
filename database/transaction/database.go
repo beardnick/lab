@@ -145,13 +145,13 @@ func (s *Server) start(ctx context.Context) {
 
 }
 
-type RecordLog struct {
+type UndoLog struct {
 	data string
 	tx   int
 }
 
 type Record struct {
-	versions []RecordLog
+	versions []UndoLog
 	sync.Mutex
 }
 
@@ -175,7 +175,7 @@ type ReadView struct {
 }
 
 func (t *Trans) Set(key, value string) (nt *Trans) {
-	t.database.Set(key, RecordLog{
+	t.database.Set(key, UndoLog{
 		data: value,
 		tx:   t.tx,
 	})
@@ -190,9 +190,9 @@ func (t *Trans) Get(key string) (value string) {
 		return ""
 	}
 	record.Lock()
-	committedRecords := lo.Filter(record.versions, func(item RecordLog, index int) bool { return !lo.Contains(transIds, item.tx) })
+	committedRecords := lo.Filter(record.versions, func(item UndoLog, index int) bool { return !lo.Contains(transIds, item.tx) })
 	record.Unlock()
-	latestRecord := lo.MaxBy(committedRecords, func(a, b RecordLog) bool { return a.tx > b.tx })
+	latestRecord := lo.MaxBy(committedRecords, func(a, b UndoLog) bool { return a.tx > b.tx })
 	return latestRecord.data
 }
 
@@ -260,18 +260,18 @@ func (d *DataBase) TransRollback(t *Trans) (nt *Trans) {
 	return
 }
 
-func (d *DataBase) Set(key string, value RecordLog) {
+func (d *DataBase) Set(key string, value UndoLog) {
 	d.dataMutex.Lock()
 	v, ok := d.data[key]
 	d.dataMutex.Unlock()
 	if !ok {
 		v = &Record{
-			versions: []RecordLog{},
+			versions: []UndoLog{},
 			Mutex:    sync.Mutex{},
 		}
 	}
 	v.Lock()
-	v.versions = append([]RecordLog{value}, v.versions...)
+	v.versions = append([]UndoLog{value}, v.versions...)
 	v.Unlock()
 
 	d.dataMutex.Lock()
