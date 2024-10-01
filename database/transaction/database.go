@@ -13,6 +13,13 @@ import (
 	"github.com/samber/lo"
 )
 
+type HandleResult string
+
+const (
+	ResultOk  = "ok"
+	ResultErr = "err"
+)
+
 type Server struct {
 	database *DataBase
 	address  string
@@ -50,14 +57,37 @@ func (s *Session) Handle(ctx context.Context) {
 		}
 		data := string(buf[:n])
 		datas := strings.Split(data, "\n")
+		datas = lo.Filter(datas, func(v string, _ int) bool { return v != "" })
 		commands := lo.Map(
 			datas,
 			func(item string, index int) []string { return strings.Split(item, " ") },
 		)
 		for _, v := range commands {
-			s.HandleCommand(v)
+			result := s.HandleCommand(v)
+			if result.Code == ResultOk {
+				_, err = s.conn.Write([]byte(resultMsg(result) + "\n"))
+				if err != nil {
+					log.Printf("response conn %v err:%v\n", s.conn.RemoteAddr(), err)
+				}
+			}
 		}
 	}
+}
+
+func resultMsg(result Result) string {
+	if result.Code == ResultOk {
+		if result.Msg != "" {
+			return result.Msg
+		}
+		return ResultOk
+	}
+	if result.Code == ResultErr {
+		if result.Msg != "" {
+			return fmt.Sprintf("%s:%s", result.Code, result.Msg)
+		}
+		return ResultErr
+	}
+	return ""
 }
 
 type Session struct {
@@ -66,12 +96,15 @@ type Session struct {
 	database *DataBase
 	stopCtx  context.CancelFunc
 }
+type Result struct {
+	Code string
+	Msg  string
+}
 
-func (s *Session) HandleCommand(command []string) {
+func (s *Session) HandleCommand(command []string) (res Result) {
 	switch command[0] {
 	case "exit":
 		s.Close()
-		return
 	case "set":
 		if s.trans == nil {
 			s.trans = s.database.TransBegin(false)
@@ -87,28 +120,26 @@ func (s *Session) HandleCommand(command []string) {
 			s.trans = s.database.TransBegin(true)
 			value := s.trans.Get(command[1])
 			s.trans = nil
-			s.conn.Write([]byte(fmt.Sprintln(value)))
-			break
+			return Result{Code: ResultOk, Msg: value}
 		}
 		value := s.trans.Get(command[1])
-		s.conn.Write([]byte(fmt.Sprintln(value)))
+		return Result{Code: ResultOk, Msg: value}
 	case "begin":
 		s.trans = s.database.TransBegin(false)
 	case "commit":
 		if s.trans == nil {
-			s.conn.Write([]byte(fmt.Sprintln("no trans")))
-			break
+			return Result{Code: ResultErr, Msg: "no trans"}
 		}
 		s.trans.Commit()
 		s.trans = nil
 	case "rollback":
 		if s.trans == nil {
-			s.conn.Write([]byte(fmt.Sprintln("no trans")))
-			break
+			return Result{Code: ResultErr, Msg: "no trans"}
 		}
 		s.trans.Rollback()
 		s.trans = nil
 	}
+	return Result{Code: ResultOk, Msg: ""}
 }
 
 func (s *Server) Start(ctx context.Context) {
@@ -164,6 +195,7 @@ type DataBase struct {
 }
 
 type Trans struct {
+	upLimit  int
 	keys     []string
 	database *DataBase
 	readView ReadView
@@ -184,37 +216,57 @@ func (t *Trans) Set(key, value string) (nt *Trans) {
 }
 
 func (t *Trans) Get(key string) (value string) {
-	transIds := lo.Keys(t.readView.uncommittedTrans)
 	record, ok := t.database.Get(key)
 	if !ok {
 		return ""
 	}
 	record.Lock()
-	committedRecords := lo.Filter(record.versions, func(item UndoLog, index int) bool { return !lo.Contains(transIds, item.tx) })
+	visibleRecords := []UndoLog{}
+	for _, v := range record.versions {
+		if v.tx > t.upLimit {
+			continue
+		}
+		if v.tx == t.tx {
+			visibleRecords = append(visibleRecords, v)
+		}
+		_, uncommitted := t.readView.uncommittedTrans[v.tx]
+		if !uncommitted {
+			visibleRecords = append(visibleRecords, v)
+		}
+	}
 	record.Unlock()
-	latestRecord := lo.MaxBy(committedRecords, func(a, b UndoLog) bool { return a.tx > b.tx })
+	latestRecord := lo.MaxBy(visibleRecords, func(a, b UndoLog) bool { return a.tx > b.tx })
 	return latestRecord.data
 }
 
 // func (t *Trans) Del(key string) (nt *Trans) {
 // }
 
-func (d *DataBase) GenTransId(read bool) (tid int) {
-	if read {
-		return int(atomic.LoadInt32(&d.version))
-	}
+func (d *DataBase) GenTransId() (tid int) {
 	return int(atomic.AddInt32(&d.version, 1))
 }
 
+func (d *DataBase) GetTransId() (tid int) {
+	return int(atomic.LoadInt32(&d.version))
+}
+
 func (d *DataBase) TransBegin(read bool) (t *Trans) {
+	if read {
+		t = &Trans{
+			upLimit:  d.GetTransId(),
+			database: d,
+			readView: d.ReadView(),
+		}
+		return
+	}
+
 	t = &Trans{
 		database: d,
 		readView: d.ReadView(),
-		tx:       d.GenTransId(read),
+		tx:       d.GenTransId(),
 	}
-	if read {
-		return t
-	}
+	t.upLimit = t.tx
+
 	d.uncommittedMutex.Lock()
 	d.uncommittedTrans[t.tx] = *t
 	d.uncommittedMutex.Unlock()

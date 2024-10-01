@@ -36,21 +36,41 @@ func CreateClient(address string, deadLine time.Duration) (c *Client, err error)
 
 func (c *Client) Set(key, value string) (err error) {
 	_, err = c.conn.Write([]byte(fmt.Sprintf("set %s %s\n", key, value)))
+	if err != nil {
+		return
+	}
+	buf := make([]byte, 1024)
+	_, err = c.conn.Read(buf)
 	return
 }
 
 func (c *Client) Begin() (err error) {
 	_, err = c.conn.Write([]byte("begin\n"))
+	if err != nil {
+		return
+	}
+	buf := make([]byte, 1024)
+	_, err = c.conn.Read(buf)
 	return
 }
 
 func (c *Client) Commit() (err error) {
 	_, err = c.conn.Write([]byte("commit\n"))
+	if err != nil {
+		return
+	}
+	buf := make([]byte, 1024)
+	_, err = c.conn.Read(buf)
 	return
 }
 
 func (c *Client) Rollback() (err error) {
 	_, err = c.conn.Write([]byte("rollback\n"))
+	if err != nil {
+		return
+	}
+	buf := make([]byte, 1024)
+	_, err = c.conn.Read(buf)
 	return
 }
 
@@ -104,7 +124,7 @@ func Test_TransGetSet(t *testing.T) {
 	// haven't set hello, should get ""
 	value, err := client.Get("hello")
 	assert.Nil(t, err)
-	assert.Equal(t, "", value)
+	assert.Equal(t, "ok", value)
 
 	// set hello, should get hello value
 	assert.Nil(t, client.Set("hello", "world"))
@@ -156,6 +176,36 @@ func Test_TransCommit(t *testing.T) {
 	assert.Equal(t, "world1", value)
 
 	stop()
+}
+
+func Test_TransShouldSeeTransSetValue(t *testing.T) {
+	server, err := createServer()
+	assert.Nil(t, err)
+	ctx, stop := context.WithCancel(context.Background())
+	server.Start(ctx)
+	defer stop()
+
+	client1, err := CreateClient(server.address, time.Second)
+	assert.Nil(t, err)
+	client2, err := CreateClient(server.address, time.Second)
+	assert.Nil(t, err)
+
+	client1.Begin()
+	client2.Begin()
+
+	err = client1.Set("hello", "1")
+	assert.Nil(t, err)
+	err = client2.Set("hello", "2")
+	assert.Nil(t, err)
+
+	v, err := client1.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "1", v)
+
+	v, err = client2.Get("hello")
+	assert.Nil(t, err)
+	assert.Equal(t, "2", v)
+
 }
 
 func Test_TransRollback(t *testing.T) {
