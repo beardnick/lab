@@ -64,7 +64,6 @@ type Session struct {
 	conn     net.Conn
 	trans    *Trans
 	database *DataBase
-	data     []byte
 	stopCtx  context.CancelFunc
 }
 
@@ -123,7 +122,7 @@ func (s *Server) start(ctx context.Context) {
 		dataMutex:        sync.Mutex{},
 		data:             map[string]*Record{},
 		uncommittedMutex: sync.Mutex{},
-		uncommittedTrans: []Trans{},
+		uncommittedTrans: map[int]Trans{},
 	}
 	l, err := net.Listen("tcp", s.address)
 	if err != nil {
@@ -161,7 +160,7 @@ type DataBase struct {
 	dataMutex        sync.Mutex
 	data             map[string]*Record
 	uncommittedMutex sync.Mutex
-	uncommittedTrans []Trans
+	uncommittedTrans map[int]Trans
 }
 
 type Trans struct {
@@ -172,7 +171,7 @@ type Trans struct {
 }
 
 type ReadView struct {
-	uncommittedTrans []Trans
+	uncommittedTrans map[int]Trans
 }
 
 func (t *Trans) Set(key, value string) (nt *Trans) {
@@ -185,7 +184,7 @@ func (t *Trans) Set(key, value string) (nt *Trans) {
 }
 
 func (t *Trans) Get(key string) (value string) {
-	transIds := lo.Map(t.readView.uncommittedTrans, func(item Trans, index int) int { return item.tx })
+	transIds := lo.Keys(t.readView.uncommittedTrans)
 	record, ok := t.database.Get(key)
 	if !ok {
 		return ""
@@ -217,7 +216,7 @@ func (d *DataBase) TransBegin(read bool) (t *Trans) {
 		return t
 	}
 	d.uncommittedMutex.Lock()
-	d.uncommittedTrans = append(d.uncommittedTrans, *t)
+	d.uncommittedTrans[t.tx] = *t
 	d.uncommittedMutex.Unlock()
 	return t
 }
@@ -232,21 +231,15 @@ func (t *Trans) Rollback() {
 
 func (d *DataBase) TransCommit(t *Trans) {
 	d.uncommittedMutex.Lock()
-	for i := 0; i < len(d.uncommittedTrans); i++ {
-		if d.uncommittedTrans[i].tx == t.tx {
-			d.uncommittedTrans = append(d.uncommittedTrans[:i], d.uncommittedTrans[i+1:]...)
-			break
-		}
-	}
+	delete(d.uncommittedTrans, t.tx)
 	d.uncommittedMutex.Unlock()
-	return
 }
 
 func (d *DataBase) TransRollback(t *Trans) (nt *Trans) {
 	d.uncommittedMutex.Lock()
 	for i := 0; i < len(d.uncommittedTrans); i++ {
 		if d.uncommittedTrans[i].tx == t.tx {
-			d.uncommittedTrans = append(d.uncommittedTrans[:i], d.uncommittedTrans[i+1:]...)
+			delete(d.uncommittedTrans, t.tx)
 			break
 		}
 	}
@@ -296,9 +289,11 @@ func (d *DataBase) Get(key string) (*Record, bool) {
 }
 
 func (d *DataBase) ReadView() ReadView {
-	view := ReadView{uncommittedTrans: []Trans{}}
+	view := ReadView{uncommittedTrans: make(map[int]Trans, len(d.uncommittedTrans))}
 	d.uncommittedMutex.Lock()
-	view.uncommittedTrans = append(view.uncommittedTrans, d.uncommittedTrans...)
+	for k, v := range d.uncommittedTrans {
+		view.uncommittedTrans[k] = v
+	}
 	d.uncommittedMutex.Unlock()
 	return view
 }
