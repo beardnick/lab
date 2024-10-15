@@ -1,0 +1,11 @@
+{
+    "configurations": [
+        {
+            "type": "go",
+            "name": "tun",
+            "goExecPath": "/usr/bin/go",
+            "buildParams": [],
+        },
+
+    ]
+}
