@@ -6,16 +6,11 @@ import (
 )
 
 type Runtime struct {
-	memoryLock sync.RWMutex
-	memory     []uint16
+	sync.RWMutex
 
-	objectLock sync.RWMutex
-	objects    map[uint16]struct{}
-
-	allocatedLock sync.RWMutex
-	allocated     []bool
-
-	gcRootsLock  sync.RWMutex
+	memory       []uint16
+	objects      map[uint16]struct{}
+	allocated    []bool
 	gcRoots      map[uint16]struct{}
 	size         uint16
 	maxAllocSize uint16
@@ -33,13 +28,21 @@ func NewRuntime(size, maxAllocSize uint16) *Runtime {
 }
 
 func (r *Runtime) Malloc(size uint16) (uint16, error) {
+	return r.malloc(size, false)
+}
+
+func (r *Runtime) MallocGcRoot(size uint16) (uint16, error) {
+	return r.malloc(size, true)
+}
+
+func (r *Runtime) malloc(size uint16, gcRoot bool) (uint16, error) {
 	if size > r.maxAllocSize {
 		return 0, fmt.Errorf("size %d exceeds max size %d", size, r.maxAllocSize)
 	}
 	var cnt uint16 = 0
 	addr := -1
-	r.allocatedLock.Lock()
-	defer r.allocatedLock.Unlock()
+	r.Lock()
+	defer r.Unlock()
 	for i, v := range r.allocated {
 		if v {
 			cnt = 0
@@ -57,49 +60,41 @@ func (r *Runtime) Malloc(size uint16) (uint16, error) {
 	if addr == -1 || cnt != size+1 {
 		return 0, fmt.Errorf("no memory block of size %d available", size)
 	}
-	r.memoryLock.Lock()
 	r.memory[addr] = MemoryBlock(size)
-	r.memoryLock.Unlock()
 	var i uint16
 	for i = 0; i < size+1; i++ {
 		r.allocated[uint16(addr)+i] = true
 	}
 	obj := Pointer(uint16(addr + 1))
-	r.objectLock.Lock()
 	r.objects[obj] = struct{}{}
-	r.objectLock.Unlock()
+	if gcRoot {
+		r.gcRoots[obj] = struct{}{}
+	}
 	return obj, nil
 }
 
 func (r *Runtime) Free(address uint16) {
 	baseAddr := Address(address)
-	r.memoryLock.RLock()
+	r.Lock()
+	defer r.Unlock()
 	size := MemoryBlockSize(r.memory[baseAddr-1])
-	r.memoryLock.RUnlock()
 	var i uint16
-	r.allocatedLock.Lock()
-	defer r.allocatedLock.Unlock()
 	for i = 0; i < size+1; i++ {
 		r.allocated[baseAddr-1+i] = false
 	}
-	r.objectLock.Lock()
 	delete(r.objects, address)
-	r.objectLock.Unlock()
-
-	r.gcRootsLock.Lock()
 	delete(r.gcRoots, address)
-	r.gcRootsLock.Unlock()
 }
 
 func (r *Runtime) Unset(base, offset uint16) {
 	baseAddr := Address(base)
-	r.memoryLock.Lock()
+	r.Lock()
+	defer r.Unlock()
 	size := MemoryBlockSize(r.memory[baseAddr-1])
 	if offset >= size {
 		panic(fmt.Sprintf("%d out of index %d", offset, size))
 	}
 	r.memory[baseAddr+offset] = 0
-	r.memoryLock.Unlock()
 }
 
 func (r *Runtime) Set(base, offset, value uint16) {
@@ -107,30 +102,31 @@ func (r *Runtime) Set(base, offset, value uint16) {
 		panic(fmt.Sprintf("value %x is not a pointer", value))
 	}
 	baseAddr := Address(base)
-	r.memoryLock.Lock()
+	r.Lock()
+	defer r.Unlock()
 	size := MemoryBlockSize(r.memory[baseAddr-1])
 	if offset >= size {
 		panic(fmt.Sprintf("%d out of index %d", offset, size))
 	}
 	r.memory[baseAddr+offset] = value
-	r.memoryLock.Unlock()
 }
 
 func (r *Runtime) Get(base, offset uint16) uint16 {
 	baseAddr := Address(base)
-	r.memoryLock.RLock()
+	r.Lock()
+	defer r.Unlock()
 	size := MemoryBlockSize(r.memory[baseAddr-1])
 	if offset >= size {
 		panic(fmt.Sprintf("%d out of index %d", offset, size))
 	}
 	value := r.memory[baseAddr+offset]
-	r.memoryLock.RUnlock()
 	return value
 }
 
 func (r *Runtime) Pointers(address uint16) []uint16 {
 	baseAddr := Address(address)
-	r.memoryLock.RLock()
+	r.RLock()
+	defer r.RUnlock()
 	size := MemoryBlockSize(r.memory[baseAddr-1])
 	result := make([]uint16, 0, size)
 	var i uint16
@@ -141,52 +137,40 @@ func (r *Runtime) Pointers(address uint16) []uint16 {
 		}
 		result = append(result, data)
 	}
-	r.memoryLock.RUnlock()
 	return result
 }
 
 func (r *Runtime) Objects() []uint16 {
-	r.objectLock.RLock()
+	r.RLock()
+	defer r.RUnlock()
 	result := make([]uint16, 0, len(r.objects))
 	for obj := range r.objects {
 		result = append(result, obj)
 	}
-	r.objectLock.RUnlock()
 	return result
 }
 
-func (r *Runtime) MallocGcRoot(size uint16) (uint16, error) {
-	obj, err := r.Malloc(size)
-	if err != nil {
-		return 0, err
-	}
-	r.gcRootsLock.Lock()
-	r.gcRoots[obj] = struct{}{}
-	r.gcRootsLock.Unlock()
-	return obj, nil
-}
-
 func (r *Runtime) GcRoot() []uint16 {
-	r.gcRootsLock.RLock()
+	r.RLock()
+	defer r.RUnlock()
 	result := make([]uint16, 0, len(r.gcRoots))
 	for root := range r.gcRoots {
 		result = append(result, root)
 	}
-	r.gcRootsLock.RUnlock()
 	return result
 }
 
 func (r *Runtime) objectExits(address uint16) bool {
-	r.objectLock.RLock()
+	r.RLock()
+	defer r.RUnlock()
 	_, ok := r.objects[address]
-	r.objectLock.RUnlock()
 	return ok
 }
 
 func (r *Runtime) gcRootExits(address uint16) bool {
-	r.gcRootsLock.RLock()
+	r.RLock()
+	defer r.RUnlock()
 	_, ok := r.gcRoots[address]
-	r.gcRootsLock.RUnlock()
 	return ok
 }
 
