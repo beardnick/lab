@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"sync"
 )
+
+type MemoryBarrier func(r *Runtime, address uint16)
 
 type Runtime struct {
 	sync.RWMutex
@@ -14,16 +17,21 @@ type Runtime struct {
 	gcRoots      map[uint16]struct{}
 	size         uint16
 	maxAllocSize uint16
+
+	writeBarrier  MemoryBarrier
+	deleteBarrier MemoryBarrier
 }
 
 func NewRuntime(size, maxAllocSize uint16) *Runtime {
 	return &Runtime{
-		memory:       make([]uint16, size),
-		allocated:    make([]bool, size),
-		objects:      make(map[uint16]struct{}),
-		gcRoots:      make(map[uint16]struct{}),
-		size:         size,
-		maxAllocSize: maxAllocSize,
+		memory:        make([]uint16, size),
+		allocated:     make([]bool, size),
+		objects:       make(map[uint16]struct{}),
+		gcRoots:       make(map[uint16]struct{}),
+		writeBarrier:  nil,
+		deleteBarrier: nil,
+		size:          size,
+		maxAllocSize:  maxAllocSize,
 	}
 }
 
@@ -70,6 +78,10 @@ func (r *Runtime) malloc(size uint16, gcRoot bool) (uint16, error) {
 	if gcRoot {
 		r.gcRoots[obj] = struct{}{}
 	}
+	if r.writeBarrier != nil {
+		r.writeBarrier(r, obj)
+	}
+	log.Printf("malloc %d %d %v\n", obj, size, gcRoot)
 	return obj, nil
 }
 
@@ -94,6 +106,10 @@ func (r *Runtime) Unset(base, offset uint16) {
 	if offset >= size {
 		panic(fmt.Sprintf("%d out of index %d", offset, size))
 	}
+	obj := r.memory[baseAddr+offset]
+	if r.deleteBarrier != nil {
+		r.deleteBarrier(r, obj)
+	}
 	r.memory[baseAddr+offset] = 0
 }
 
@@ -108,13 +124,16 @@ func (r *Runtime) Set(base, offset, value uint16) {
 	if offset >= size {
 		panic(fmt.Sprintf("%d out of index %d", offset, size))
 	}
+	if r.writeBarrier != nil {
+		r.writeBarrier(r, value)
+	}
 	r.memory[baseAddr+offset] = value
 }
 
 func (r *Runtime) Get(base, offset uint16) uint16 {
 	baseAddr := Address(base)
-	r.Lock()
-	defer r.Unlock()
+	r.RLock()
+	defer r.RUnlock()
 	size := MemoryBlockSize(r.memory[baseAddr-1])
 	if offset >= size {
 		panic(fmt.Sprintf("%d out of index %d", offset, size))
@@ -143,6 +162,10 @@ func (r *Runtime) Pointers(address uint16) []uint16 {
 func (r *Runtime) Objects() []uint16 {
 	r.RLock()
 	defer r.RUnlock()
+	return r.objectSlice()
+}
+
+func (r *Runtime) objectSlice() []uint16 {
 	result := make([]uint16, 0, len(r.objects))
 	for obj := range r.objects {
 		result = append(result, obj)
@@ -153,6 +176,10 @@ func (r *Runtime) Objects() []uint16 {
 func (r *Runtime) GcRoot() []uint16 {
 	r.RLock()
 	defer r.RUnlock()
+	return r.gcRoot()
+}
+
+func (r *Runtime) gcRoot() []uint16 {
 	result := make([]uint16, 0, len(r.gcRoots))
 	for root := range r.gcRoots {
 		result = append(result, root)
@@ -172,6 +199,54 @@ func (r *Runtime) gcRootExits(address uint16) bool {
 	defer r.RUnlock()
 	_, ok := r.gcRoots[address]
 	return ok
+}
+
+func (r *Runtime) RemoveGcRoot(address uint16) {
+	if !IsPointer(address) {
+		panic(fmt.Sprintf("address %x is not a pointer", address))
+	}
+	r.Lock()
+	defer r.Unlock()
+	delete(r.gcRoots, address)
+}
+
+func (r *Runtime) AddWriteBarrier(barrier MemoryBarrier) {
+	r.Lock()
+	defer r.Unlock()
+	r.addWriteBarrier(barrier)
+}
+
+func (r *Runtime) addWriteBarrier(barrier MemoryBarrier) {
+	r.writeBarrier = barrier
+}
+
+func (r *Runtime) AddDeleteBarrier(barrier MemoryBarrier) {
+	r.Lock()
+	defer r.Unlock()
+	r.addDeleteBarrier(barrier)
+}
+
+func (r *Runtime) addDeleteBarrier(barrier MemoryBarrier) {
+	r.deleteBarrier = barrier
+}
+
+func (r *Runtime) UnsetBarrier() {
+	r.Lock()
+	defer r.Unlock()
+	r.unsetBarrier()
+}
+
+func (r *Runtime) unsetBarrier() {
+	r.writeBarrier = nil
+	r.deleteBarrier = nil
+}
+
+func (r *Runtime) StopTheWorld() {
+	r.RLock()
+}
+
+func (r *Runtime) ResumeTheWorld() {
+	r.RUnlock()
 }
 
 func MemoryBlock(size uint16) uint16 {
