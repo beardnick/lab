@@ -20,7 +20,7 @@ func Test_GcNoGarbage(t *testing.T) {
 	r.Set(b, 0, c)
 
 	info := Gc(r)
-	assert.Equal(t, GcInfo{RecycledObjects: 0}, info)
+	assert.Equal(t, GcInfo{TotalObjects: 3, RecycledObjects: 0}, info)
 }
 
 func Test_GcChain(t *testing.T) {
@@ -36,7 +36,7 @@ func Test_GcChain(t *testing.T) {
 	r.Unset(a, 0)
 
 	info := Gc(r)
-	assert.Equal(t, GcInfo{RecycledObjects: 2}, info)
+	assert.Equal(t, GcInfo{TotalObjects: 3, RecycledObjects: 2}, info)
 }
 
 func Test_GcLoop(t *testing.T) {
@@ -53,7 +53,7 @@ func Test_GcLoop(t *testing.T) {
 	r.Unset(a, 0)
 
 	info := Gc(r)
-	assert.Equal(t, GcInfo{RecycledObjects: 2}, info)
+	assert.Equal(t, GcInfo{TotalObjects: 3, RecycledObjects: 2}, info)
 }
 
 func Test_GcLoopNoGarbage(t *testing.T) {
@@ -69,7 +69,7 @@ func Test_GcLoopNoGarbage(t *testing.T) {
 	r.Set(c, 0, b)
 
 	info := Gc(r)
-	assert.Equal(t, GcInfo{RecycledObjects: 0}, info)
+	assert.Equal(t, GcInfo{TotalObjects: 3, RecycledObjects: 0}, info)
 }
 
 func Test_GcMultipleGcRoots(t *testing.T) {
@@ -89,7 +89,7 @@ func Test_GcMultipleGcRoots(t *testing.T) {
 	r.Unset(a, 0)
 
 	info := Gc(r)
-	assert.Equal(t, GcInfo{RecycledObjects: 0}, info)
+	assert.Equal(t, GcInfo{TotalObjects: 4, RecycledObjects: 0}, info)
 }
 
 func Test_GcConcurrently(t *testing.T) {
