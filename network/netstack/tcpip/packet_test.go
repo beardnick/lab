@@ -1,0 +1,173 @@
+package tcpip
+
+import (
+	"net"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestDecodePack(t *testing.T) {
+	type args struct {
+		data []byte
+	}
+	tests := []struct {
+		name string
+		args args
+		want *IPPack
+	}{
+		{
+			name: "only header",
+			args: args{
+				data: []byte{
+					// ip header
+					0x45, 0x00, 0x00, 0x3c,
+					0x80, 0x40, 0x40, 0x00,
+					0x40, 0x06, 0xa4, 0x79,
+					0x0b, 0x00, 0x00, 0x01,
+					0x0b, 0x00, 0x00, 0x02,
+					// tcp header
+					0xbb, 0xf8, 0x00, 0x50,
+					0x08, 0xa8, 0x4a, 0x04,
+					0x00, 0x00, 0x00, 0x00,
+					0xa0, 0x02, 0xfa, 0xf0,
+					0x67, 0x67, 0x00, 0x00,
+					0x02, 0x04, 0x05, 0xb4,
+					0x04, 0x02, 0x08, 0x0a,
+					0xbf, 0xb6, 0x00, 0xfa,
+					0x00, 0x00, 0x00, 0x00,
+					0x01, 0x03, 0x03, 0x07,
+				},
+			},
+			want: &IPPack{
+				header: &IPHeader{
+					Version:        4,
+					HeaderLength:   5,
+					TypeOfService:  0,
+					TotalLength:    0x003c,
+					Identification: 0x8040,
+					Flags:          2,
+					FragmentOffset: 0,
+					TimeToLive:     0x40,
+					Protocol:       0x06,
+					HeaderChecksum: 0xa479,
+					SourceIP:       net.IP{0x0b, 0x00, 0x00, 0x01},
+					DestinationIP:  net.IP{0x0b, 0x00, 0x00, 0x02},
+					Options:        []byte{},
+				},
+				payload: &TcpPack{
+					header: &TcpHeader{
+						SourcePort:      0xbbf8,
+						DestinationPort: 0x0050,
+						SequenceNumber:  0x08a84a04,
+						AckNumber:       0x00000000,
+						DataOffset:      40,
+						Reserved:        0x0,
+						Flags:           0x02,
+						WindowSize:      0xfaf0,
+						Checksum:        0x6767,
+						UrgentPointer:   0x0000,
+						Options: []byte{
+							0x02, 0x04, 0x05, 0xb4,
+							0x04, 0x02, 0x08, 0x0a,
+							0xbf, 0xb6, 0x00, 0xfa,
+							0x00, 0x00, 0x00, 0x00,
+							0x01, 0x03, 0x03, 0x07,
+						},
+					},
+					payload: &RawPack{data: []byte{}},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pack := NewIPPack(NewTcpPack(&RawPack{}))
+			got, err := pack.Decode(tt.args.data)
+			assert.Nil(t, err)
+			assert.Equal(t, got, tt.want)
+		})
+	}
+}
+
+func TestEncodePack(t *testing.T) {
+	type args struct {
+		pack *IPPack
+	}
+	tests := []struct {
+		name string
+		args args
+		want []byte
+	}{
+		{
+			name: "only header",
+			args: args{
+				pack: &IPPack{
+					header: &IPHeader{
+						Version:        4,
+						HeaderLength:   5,
+						TypeOfService:  0,
+						TotalLength:    0x003c,
+						Identification: 0x8040,
+						Flags:          2,
+						FragmentOffset: 0,
+						TimeToLive:     0x40,
+						Protocol:       0x06,
+						HeaderChecksum: 0xa479,
+						SourceIP:       net.IP{0x0b, 0x00, 0x00, 0x01},
+						DestinationIP:  net.IP{0x0b, 0x00, 0x00, 0x02},
+						Options:        []byte{},
+					},
+					payload: &TcpPack{
+						header: &TcpHeader{
+							SourcePort:      0xbbf8,
+							DestinationPort: 0x0050,
+							SequenceNumber:  0x08a84a04,
+							AckNumber:       0x00000000,
+							DataOffset:      40,
+							Reserved:        0x0,
+							Flags:           0x02,
+							WindowSize:      0xfaf0,
+							Checksum:        0x6767,
+							UrgentPointer:   0x0000,
+							Options: []byte{
+								0x02, 0x04, 0x05, 0xb4,
+								0x04, 0x02, 0x08, 0x0a,
+								0xbf, 0xb6, 0x00, 0xfa,
+								0x00, 0x00, 0x00, 0x00,
+								0x01, 0x03, 0x03, 0x07,
+							},
+						},
+						payload: &RawPack{data: []byte{}},
+					},
+				},
+			},
+			want: []byte{
+				// ip header
+				0x45, 0x00, 0x00, 0x3c,
+				0x80, 0x40, 0x40, 0x00,
+				0x40, 0x06, 0xa4, 0x79,
+				0x0b, 0x00, 0x00, 0x01,
+				0x0b, 0x00, 0x00, 0x02,
+				// tcp header
+				0xbb, 0xf8, 0x00, 0x50,
+				0x08, 0xa8, 0x4a, 0x04,
+				0x00, 0x00, 0x00, 0x00,
+				0xa0, 0x02, 0xfa, 0xf0,
+				0x67, 0x67, 0x00, 0x00,
+				0x02, 0x04, 0x05, 0xb4,
+				0x04, 0x02, 0x08, 0x0a,
+				0xbf, 0xb6, 0x00, 0xfa,
+				0x00, 0x00, 0x00, 0x00,
+				0x01, 0x03, 0x03, 0x07,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.args.pack.Encode()
+			assert.Nil(t, err)
+			assert.Equal(t, got, tt.want)
+		})
+	}
+}
