@@ -5,7 +5,15 @@ import (
 	"net"
 )
 
+type IPProtocol uint8
+
+const (
+	ProtocolTCP IPProtocol = 6
+)
+
 type IPHeader struct {
+	SrcIP          net.IP
+	DstIP          net.IP
 	Version        uint8
 	HeaderLength   uint8
 	TypeOfService  uint8
@@ -16,18 +24,16 @@ type IPHeader struct {
 	TimeToLive     uint8
 	Protocol       uint8
 	HeaderChecksum uint16
-	SourceIP       net.IP
 	Options        []byte
-	DestinationIP  net.IP
 }
 
 type IPPack struct {
-	header  *IPHeader
-	payload NetworkPacket
+	*IPHeader
+	Payload NetworkPacket
 }
 
 func NewIPPack(payload NetworkPacket) *IPPack {
-	return &IPPack{payload: payload}
+	return &IPPack{Payload: payload}
 }
 
 // https://datatracker.ietf.org/doc/html/rfc791#section-3.1
@@ -49,7 +55,7 @@ func NewIPPack(payload NetworkPacket) *IPPack {
 func (i *IPPack) Decode(data []byte) (*IPPack, error) {
 	header := &IPHeader{
 		Version:        data[0] >> 4,
-		HeaderLength:   data[0] & 0x0f,
+		HeaderLength:   (data[0] & 0x0f) * 4,
 		TypeOfService:  data[1],
 		TotalLength:    binary.BigEndian.Uint16(data[2:4]),
 		Identification: binary.BigEndian.Uint16(data[4:6]),
@@ -58,36 +64,76 @@ func (i *IPPack) Decode(data []byte) (*IPPack, error) {
 		TimeToLive:     data[8],
 		Protocol:       data[9],
 		HeaderChecksum: binary.BigEndian.Uint16(data[10:12]),
-		SourceIP:       net.IP(data[12:16]),
-		DestinationIP:  net.IP(data[16:20]),
+		SrcIP:          net.IP(data[12:16]),
+		DstIP:          net.IP(data[16:20]),
 	}
-	header.Options = data[20 : header.HeaderLength*4]
-	i.header = header
-	payload, err := i.payload.Decode(data[header.HeaderLength*4:])
+	header.Options = data[20:header.HeaderLength]
+	i.IPHeader = header
+	payload, err := i.Payload.Decode(data[header.HeaderLength:])
 	if err != nil {
 		return nil, err
 	}
-	i.payload = payload
+	i.Payload = payload
 	return i, nil
 }
 
 func (i *IPPack) Encode() ([]byte, error) {
-	data := make([]byte, 0)
-	data = append(data, i.header.Version<<4|i.header.HeaderLength)
-	data = append(data, i.header.TypeOfService)
-	data = binary.BigEndian.AppendUint16(data, i.header.TotalLength)
-	data = binary.BigEndian.AppendUint16(data, i.header.Identification)
-	data = binary.BigEndian.AppendUint16(data, uint16(i.header.Flags)<<13|i.header.FragmentOffset)
-	data = append(data, i.header.TimeToLive)
-	data = append(data, i.header.Protocol)
-	data = binary.BigEndian.AppendUint16(data, i.header.HeaderChecksum)
-	data = append(data, i.header.SourceIP...)
-	data = append(data, i.header.DestinationIP...)
-	data = append(data, i.header.Options...)
-	payload, err := i.payload.Encode()
-	if err != nil {
-		return nil, err
+	var (
+		payload []byte
+		err     error
+	)
+	if i.Payload != nil {
+		payload, err = i.Payload.Encode()
+		if err != nil {
+			return nil, err
+		}
 	}
+	data := make([]byte, 0)
+	if i.HeaderLength == 0 {
+		i.HeaderLength = uint8(20 + len(i.Options))
+	}
+	data = append(data, i.Version<<4|i.HeaderLength/4)
+	data = append(data, i.TypeOfService)
+	if i.TotalLength == 0 {
+		i.TotalLength = uint16(i.HeaderLength) + uint16(len(payload))
+	}
+	data = binary.BigEndian.AppendUint16(data, i.TotalLength)
+	data = binary.BigEndian.AppendUint16(data, i.Identification)
+	data = binary.BigEndian.AppendUint16(data, uint16(i.Flags)<<13|i.FragmentOffset)
+	data = append(data, i.TimeToLive)
+	data = append(data, i.Protocol)
+	data = binary.BigEndian.AppendUint16(data, i.HeaderChecksum)
+	data = append(data, i.SrcIP...)
+	data = append(data, i.DstIP...)
+	data = append(data, i.Options...)
+	if i.HeaderChecksum == 0 {
+		i.HeaderChecksum = calculateIPChecksum(data)
+	}
+	binary.BigEndian.PutUint16(data[10:12], i.HeaderChecksum)
 	data = append(data, payload...)
+
 	return data, nil
+}
+
+func calculateIPChecksum(headerData []byte) uint16 {
+	var sum uint32
+	if len(headerData)%2 == 1 {
+		headerData = append(headerData, 0)
+	}
+	for i := 0; i < len(headerData); i += 2 {
+		sum += uint32(binary.BigEndian.Uint16(headerData[i : i+2]))
+	}
+
+	for sum>>16 != 0 {
+		sum = (sum & 0xffff) + (sum >> 16)
+	}
+	return ^uint16(sum)
+}
+
+func IsIPv4(data []byte) bool {
+	return data[0]>>4 == 4
+}
+
+func IsTCP(data []byte) bool {
+	return data[9] == uint8(ProtocolTCP)
 }

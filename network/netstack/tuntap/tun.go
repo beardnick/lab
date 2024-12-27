@@ -10,7 +10,7 @@ type Tun struct {
 	fd   int
 }
 
-func New(name, cidr string) (*Tun, error) {
+func NewTun(name, cidr string) (*Tun, error) {
 	fd, err := createTun(name)
 	if err != nil {
 		return nil, err

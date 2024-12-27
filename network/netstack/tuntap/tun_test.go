@@ -10,7 +10,7 @@ func TestTunRead(t *testing.T) {
 	name := "tun0"
 	cidr := "11.0.0.1/24"
 
-	tun, err := New(name, cidr)
+	tun, err := NewTun(name, cidr)
 	assert.Nil(t, err)
 
 	b := make([]byte, 1024)

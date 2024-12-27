@@ -9,6 +9,10 @@ type RawPack struct {
 	data []byte
 }
 
+func NewRawPack() *RawPack {
+	return &RawPack{data: make([]byte, 0)}
+}
+
 func (r *RawPack) Decode(data []byte) (NetworkPacket, error) {
 	r.data = data
 	return r, nil
