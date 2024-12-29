@@ -11,7 +11,7 @@ import (
 	"strconv"
 )
 
-type File interface {
+type SockFile interface {
 	Close() error
 	Read() (data []byte, err error)
 	Write(b []byte) (n int, err error)
@@ -21,7 +21,7 @@ func TcpSocket() (fd int, err error) {
 	if defaultNetwork == nil {
 		return 0, NoNetworkErr
 	}
-	return defaultNetwork.applySocket(), nil
+	return defaultNetwork.applyListenSocket(), nil
 }
 
 func Bind(fd int, addr string) (err error) {
@@ -64,7 +64,10 @@ func Connect(fd int, addr string) (err error) {
 }
 
 func Close(fd int) (err error) {
-	panic("not implemented")
+	if defaultNetwork == nil {
+		return NoNetworkErr
+	}
+	return defaultNetwork.close(fd)
 }
 
 var (
@@ -76,12 +79,14 @@ var (
 type NetworkOptions struct {
 	MTU        int
 	WindowSize uint16
+	Seq        uint32
+	Backlog    int
 }
 
 type Network struct {
 	ctx     context.Context
 	tun     *tuntap.Tun
-	files   map[int]File
+	files   map[int]SockFile
 	writeCh chan []byte
 	opt     NetworkOptions
 	route   map[string]map[int]int // todo real route match
@@ -98,11 +103,14 @@ func NewNetwork(
 	if opt.WindowSize == 0 {
 		opt.WindowSize = 1024
 	}
+	if opt.Backlog == 0 {
+		opt.Backlog = 10
+	}
 
 	return &Network{
 		ctx:     ctx,
 		tun:     tun,
-		files:   make(map[int]File),
+		files:   make(map[int]SockFile),
 		route:   make(map[string]map[int]int),
 		writeCh: make(chan []byte),
 		opt:     opt,
@@ -172,7 +180,7 @@ func (n *Network) handle(data []byte) {
 		return
 	}
 
-	ipPack, err := tcpip.NewIPPack(tcpip.NewTcpPack(tcpip.NewRawPack())).Decode(data)
+	ipPack, err := tcpip.NewIPPack(tcpip.NewTcpPack(tcpip.NewRawPack(nil))).Decode(data)
 	if err != nil {
 		log.Println("decode tcp packet failed", err)
 		return
@@ -222,6 +230,14 @@ func (n *Network) accept(fd int) (cfd int, err error) {
 		return 0, fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
 	return sock.Accept()
+}
+
+func (n *Network) close(fd int) (err error) {
+	sock, ok := n.getConnectSocket(fd)
+	if !ok {
+		return fmt.Errorf("%w: %d", NoSocketErr, fd)
+	}
+	return sock.Close()
 }
 
 func (n *Network) read(fd int) (data []byte, err error) {
@@ -288,11 +304,21 @@ func (n *Network) registerSocket(fd int, ip net.IP, port int) {
 	ports[port] = fd
 }
 
-func (n *Network) applySocket() (fd int) {
+func (n *Network) applyListenSocket() (fd int) {
 	for i := 0; ; i++ {
 		if _, ok := n.files[i]; !ok {
 			fd = i + 1
 			n.files[i] = NewListenSocket(n, fd)
+			return fd
+		}
+	}
+}
+
+func (n *Network) addFile(f SockFile) (fd int) {
+	for i := 0; ; i++ {
+		if _, ok := n.files[i]; !ok {
+			fd = i + 1
+			n.files[i] = f
 			return fd
 		}
 	}
