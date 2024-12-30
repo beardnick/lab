@@ -9,6 +9,7 @@ import (
 	"netstack/tcpip"
 	"netstack/tuntap"
 	"strconv"
+	"sync"
 )
 
 type SockFile interface {
@@ -81,15 +82,19 @@ type NetworkOptions struct {
 	WindowSize uint16
 	Seq        uint32
 	Backlog    int
+	Debug      bool
 }
 
 type Network struct {
+	sync.Mutex
 	ctx     context.Context
 	tun     *tuntap.Tun
-	files   map[int]SockFile
 	writeCh chan []byte
 	opt     NetworkOptions
-	route   map[string]map[int]int // todo real route match
+	// files   map[int]SockFile
+	// route   map[string]map[int]int // todo real route match
+	route sync.Map
+	files sync.Map
 }
 
 func NewNetwork(
@@ -110,8 +115,8 @@ func NewNetwork(
 	return &Network{
 		ctx:     ctx,
 		tun:     tun,
-		files:   make(map[int]SockFile),
-		route:   make(map[string]map[int]int),
+		files:   sync.Map{},
+		route:   sync.Map{},
 		writeCh: make(chan []byte),
 		opt:     opt,
 	}
@@ -130,17 +135,20 @@ func (n *Network) runloop() {
 }
 
 func (n *Network) readloop() {
-	buf := make([]byte, n.opt.MTU)
 	for {
 		select {
 		case <-n.ctx.Done():
 			log.Println("read loop exit")
 			return
 		default:
+			buf := make([]byte, n.opt.MTU)
 			num, err := n.tun.Read(buf)
 			if err != nil {
 				log.Println("read from tun failed", err)
 				continue
+			}
+			if n.opt.Debug {
+				debugPacket("recv", buf[:num])
 			}
 			n.handle(buf[:num])
 		}
@@ -155,6 +163,9 @@ func (n *Network) writeloop() {
 				num int
 				err error
 			)
+			if n.opt.Debug {
+				debugPacket("send", data)
+			}
 			for num < len(data) {
 				data = data[num:]
 				num, err = n.tun.Write(data)
@@ -202,6 +213,8 @@ func (n *Network) bind(fd int, addr string) (err error) {
 	if err != nil {
 		return err
 	}
+	n.Lock()
+	defer n.Unlock()
 	sock, ok := n.getListenSocketByFd(fd)
 	if !ok {
 		return fmt.Errorf("%w: %d", NoSocketErr, fd)
@@ -258,15 +271,16 @@ func (n *Network) send(fd int, data []byte) (err error) {
 }
 
 func (n *Network) getSocketFd(ip net.IP, port int) (fd int, ok bool) {
-	ports, ok := n.route[ip.String()]
+	ports, ok := n.route.Load(ip.String())
 	if !ok {
 		return 0, false
 	}
-	fd, ok = ports[port]
+	portsMap := ports.(*sync.Map)
+	value, ok := portsMap.Load(port)
 	if !ok {
 		return 0, false
 	}
-	return fd, true
+	return value.(int), true
 }
 
 func (n *Network) getListenSocket(ip net.IP, port int) (sock *ListenSocket, ok bool) {
@@ -278,7 +292,7 @@ func (n *Network) getListenSocket(ip net.IP, port int) (sock *ListenSocket, ok b
 }
 
 func (n *Network) getListenSocketByFd(fd int) (sock *ListenSocket, ok bool) {
-	f, ok := n.files[fd-1]
+	f, ok := n.files.Load(fd - 1)
 	if !ok {
 		return nil, false
 	}
@@ -287,7 +301,7 @@ func (n *Network) getListenSocketByFd(fd int) (sock *ListenSocket, ok bool) {
 }
 
 func (n *Network) getConnectSocket(fd int) (sock *ConnectSocket, ok bool) {
-	f, ok := n.files[fd-1]
+	f, ok := n.files.Load(fd - 1)
 	if !ok {
 		return nil, false
 	}
@@ -296,29 +310,34 @@ func (n *Network) getConnectSocket(fd int) (sock *ConnectSocket, ok bool) {
 }
 
 func (n *Network) registerSocket(fd int, ip net.IP, port int) {
-	ports, ok := n.route[ip.String()]
+	ports, ok := n.route.Load(ip.String())
 	if !ok {
-		ports = make(map[int]int)
-		n.route[ip.String()] = ports
+		ports = &sync.Map{}
+		n.route.Store(ip.String(), ports)
 	}
-	ports[port] = fd
+	portsMap := ports.(*sync.Map)
+	portsMap.Store(port, fd)
 }
 
 func (n *Network) applyListenSocket() (fd int) {
+	n.Lock()
+	defer n.Unlock()
 	for i := 0; ; i++ {
-		if _, ok := n.files[i]; !ok {
+		if _, ok := n.files.Load(i); !ok {
 			fd = i + 1
-			n.files[i] = NewListenSocket(n, fd)
+			n.files.Store(i, NewListenSocket(n, fd))
 			return fd
 		}
 	}
 }
 
 func (n *Network) addFile(f SockFile) (fd int) {
+	n.Lock()
+	defer n.Unlock()
 	for i := 0; ; i++ {
-		if _, ok := n.files[i]; !ok {
+		if _, ok := n.files.Load(i); !ok {
 			fd = i + 1
-			n.files[i] = f
+			n.files.Store(i, f)
 			return fd
 		}
 	}
@@ -340,4 +359,37 @@ func parseAddress(addr string) (ip net.IP, port int, err error) {
 		return nil, 0, fmt.Errorf("invalid port number: %s", portStr)
 	}
 	return ip, portNum, nil
+}
+
+func debugPacket(prefix string, data []byte) {
+	if !tcpip.IsIPv4(data) {
+		return
+	}
+	if !tcpip.IsTCP(data) {
+		return
+	}
+
+	ipPack, err := tcpip.NewIPPack(tcpip.NewTcpPack(tcpip.NewRawPack(nil))).Decode(data)
+	if err != nil {
+		log.Println("decode tcp packet failed", err)
+		return
+	}
+	tcpPack := ipPack.Payload.(*tcpip.TcpPack)
+	payload, err := tcpPack.Payload.Encode()
+	if err != nil {
+		log.Println("encode tcp payload failed", err)
+		return
+	}
+	log.Printf(
+		"%s %s:%d -> %s:%d %v seq=%d ack=%d len=%d\n",
+		prefix,
+		ipPack.SrcIP,
+		tcpPack.SrcPort,
+		ipPack.DstIP,
+		tcpPack.DstPort,
+		tcpip.InspectFlags(tcpPack.Flags),
+		tcpPack.SequenceNumber,
+		tcpPack.AckNumber,
+		len(payload),
+	)
 }

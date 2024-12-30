@@ -16,14 +16,15 @@ import (
 // nic_layer <-channel-> listen_socket_layer <-channel-> connect_socket_layer <-read/write-> api_layer
 
 type ListenSocket struct {
+	sync.Mutex
 	network        *Network
 	Fd             int
 	ip             net.IP
 	port           int
 	listening      bool
 	acceptQueue    chan *ConnectSocket
-	synQueue       map[uint16]*ConnectSocket
-	connectSockets map[uint16]*ConnectSocket
+	synQueue       sync.Map
+	connectSockets sync.Map
 	readCh         chan []byte
 	writeCh        chan *tcpip.IPPack
 }
@@ -32,8 +33,8 @@ func NewListenSocket(network *Network, fd int) *ListenSocket {
 	return &ListenSocket{
 		network:        network,
 		Fd:             fd,
-		synQueue:       make(map[uint16]*ConnectSocket, network.opt.Backlog),
-		connectSockets: make(map[uint16]*ConnectSocket, network.opt.Backlog),
+		synQueue:       sync.Map{},
+		connectSockets: sync.Map{},
 		acceptQueue:    make(chan *ConnectSocket, network.opt.Backlog),
 		readCh:         make(chan []byte),
 		writeCh:        make(chan *tcpip.IPPack),
@@ -41,8 +42,12 @@ func NewListenSocket(network *Network, fd int) *ListenSocket {
 }
 
 func (s *ListenSocket) getConnectSocket(port uint16) (cs *ConnectSocket, ok bool) {
-	cs, ok = s.connectSockets[port]
-	return
+	value, ok := s.connectSockets.Load(port)
+	if !ok {
+		return nil, false
+	}
+	cs = value.(*ConnectSocket)
+	return cs, true
 }
 
 func (s *ListenSocket) Listen(backlog int) (err error) {
@@ -69,6 +74,8 @@ func (s *ListenSocket) runloop() {
 
 func (s *ListenSocket) handle(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 	var sock *ConnectSocket
+	s.Lock()
+	defer s.Unlock()
 	sock, ok := s.getConnectSocket(tcpPack.DstPort)
 	if !ok {
 		sock = NewConnectSocket(
@@ -138,8 +145,8 @@ func (s *ListenSocket) handleState(sock *ConnectSocket, tcpPack *tcpip.TcpPack) 
 func (s *ListenSocket) handleSyn(sock *ConnectSocket, tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	sock.State = tcpip.TcpStateSynReceived
 	sock.recvNext = tcpPack.SequenceNumber + 1
-	s.synQueue[tcpPack.DstPort] = sock
-	s.connectSockets[tcpPack.DstPort] = sock
+	s.synQueue.Store(tcpPack.DstPort, sock)
+	s.connectSockets.Store(tcpPack.DstPort, sock)
 
 	var seq uint32
 	if s.network.opt.Seq == 0 {
@@ -186,7 +193,7 @@ func (s *ListenSocket) handleFirstAck(sock *ConnectSocket, tcpPack *tcpip.TcpPac
 	sock.sendUnack = tcpPack.AckNumber
 	fd := s.network.addFile(sock)
 	sock.fd = fd
-	delete(s.synQueue, sock.remotePort)
+	s.synQueue.Delete(sock.remotePort)
 	select {
 	case s.acceptQueue <- sock:
 	default:
@@ -282,7 +289,7 @@ func (s *ListenSocket) handleFin(sock *ConnectSocket, tcpPack *tcpip.TcpPack) (r
 
 func (s *ListenSocket) handleLastAck(sock *ConnectSocket) {
 	sock.State = tcpip.TcpStateClosed
-	delete(s.connectSockets, sock.remotePort)
+	s.connectSockets.Delete(sock.remotePort)
 	close(sock.readCh)
 	close(sock.writeCh)
 }

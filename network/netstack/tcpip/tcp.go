@@ -170,3 +170,24 @@ func calculateTcpChecksum(pseudo *PseudoHeader, headerPayloadData []byte) uint16
 
 	return ^uint16(sum)
 }
+
+var flagMap = map[TcpFlag]string{
+	TcpFIN: "FIN",
+	TcpSYN: "SYN",
+	TcpRST: "RST",
+	TcpPSH: "PSH",
+	TcpACK: "ACK",
+	TcpURG: "URG",
+	TcpECE: "ECE",
+	TcpCWR: "CWR",
+}
+
+func InspectFlags(flags uint8) []string {
+	flagList := []string{}
+	for flag, name := range flagMap {
+		if flags&uint8(flag) != 0 {
+			flagList = append(flagList, name)
+		}
+	}
+	return flagList
+}
