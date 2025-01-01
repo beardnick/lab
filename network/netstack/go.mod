@@ -14,5 +14,6 @@ require (
 	github.com/google/gopacket v1.1.19
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/samber/lo v1.47.0
+	golang.org/x/sys v0.28.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
