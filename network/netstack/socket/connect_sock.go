@@ -3,49 +3,10 @@ package socket
 import (
 	"fmt"
 	"io"
-	"net"
 	"netstack/tcpip"
-	"sync"
 )
 
-type ConnectSocket struct {
-	sync.Mutex
-	listenSocket *ListenSocket
-	remoteIP     net.IP
-	localIP      net.IP
-	remotePort   uint16
-	localPort    uint16
-	fd           int
-	State        tcpip.TcpState
-	readCh       chan []byte
-
-	recvNext  uint32
-	sendNext  uint32
-	sendUnack uint32
-
-	sendBuffer []byte
-}
-
-func NewConnectSocket(
-	listenSocket *ListenSocket,
-	localIP net.IP,
-	localPort uint16,
-	remoteIP net.IP,
-	remotePort uint16,
-) *ConnectSocket {
-	return &ConnectSocket{
-		listenSocket: listenSocket,
-		localIP:      localIP,
-		localPort:    localPort,
-		remoteIP:     remoteIP,
-		remotePort:   remotePort,
-		State:        tcpip.TcpStateClosed,
-		readCh:       make(chan []byte, 1024),
-		sendBuffer:   make([]byte, 1024),
-	}
-}
-
-func (s *ConnectSocket) Read() (data []byte, err error) {
+func (s *ListenSocket) Read() (data []byte, err error) {
 	s.Lock()
 	if s.State == tcpip.TcpStateCloseWait {
 		return nil, io.EOF
@@ -58,11 +19,11 @@ func (s *ConnectSocket) Read() (data []byte, err error) {
 	return data, nil
 }
 
-func (s *ConnectSocket) Write(data []byte) (n int, err error) {
+func (s *ListenSocket) Write(data []byte) (n int, err error) {
 	return s.send(data)
 }
 
-func (s *ConnectSocket) send(data []byte) (n int, err error) {
+func (s *ListenSocket) send(data []byte) (n int, err error) {
 	s.Lock()
 	defer s.Unlock()
 	send, resp, err := s.handleSend(data)
@@ -76,11 +37,11 @@ func (s *ConnectSocket) send(data []byte) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	s.listenSocket.network.writeCh <- respData
+	s.network.writeCh <- respData
 	return send, nil
 }
 
-func (s *ConnectSocket) Close() error {
+func (s *ListenSocket) Close() error {
 	var (
 		ipResp *tcpip.IPPack
 		err    error
@@ -103,12 +64,12 @@ func (s *ConnectSocket) Close() error {
 		return err
 	}
 
-	s.listenSocket.network.writeCh <- data
+	s.network.writeCh <- data
 
 	return nil
 }
 
-func (s *ConnectSocket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
+func (s *ListenSocket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
 	s.State = tcpip.TcpStateLastAck
 
 	tcpResp := &tcpip.TcpPack{
@@ -122,7 +83,7 @@ func (s *ConnectSocket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
 			SequenceNumber: s.sendNext,
 			AckNumber:      s.recvNext,
 			Flags:          uint8(tcpip.TcpFIN | tcpip.TcpACK),
-			WindowSize:     s.listenSocket.network.opt.WindowSize,
+			WindowSize:     s.network.opt.WindowSize,
 		},
 	}
 
@@ -144,7 +105,7 @@ func (s *ConnectSocket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
 	return ipResp
 }
 
-func (s *ConnectSocket) activeCloseSocket() (ipResp *tcpip.IPPack) {
+func (s *ListenSocket) activeCloseSocket() (ipResp *tcpip.IPPack) {
 	s.State = tcpip.TcpStateFinWait1
 
 	tcpResp := &tcpip.TcpPack{
@@ -158,7 +119,7 @@ func (s *ConnectSocket) activeCloseSocket() (ipResp *tcpip.IPPack) {
 			SequenceNumber: s.sendNext,
 			AckNumber:      s.recvNext,
 			Flags:          uint8(tcpip.TcpFIN | tcpip.TcpACK),
-			WindowSize:     s.listenSocket.network.opt.WindowSize,
+			WindowSize:     s.network.opt.WindowSize,
 		},
 	}
 
@@ -180,7 +141,7 @@ func (s *ConnectSocket) activeCloseSocket() (ipResp *tcpip.IPPack) {
 	return ipResp
 }
 
-func (s *ConnectSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, err error) {
+func (s *ListenSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, err error) {
 	if s.State != tcpip.TcpStateEstablished {
 		return 0, nil, fmt.Errorf("connection not established")
 	}
@@ -205,7 +166,7 @@ func (s *ConnectSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, e
 			SequenceNumber: s.sendNext,
 			AckNumber:      s.recvNext,
 			Flags:          uint8(tcpip.TcpACK),
-			WindowSize:     s.listenSocket.network.opt.WindowSize,
+			WindowSize:     s.network.opt.WindowSize,
 		},
 		Payload: tcpip.NewRawPack(data[:send]),
 	}
@@ -228,7 +189,7 @@ func (s *ConnectSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, e
 	return send, ipResp, nil
 }
 
-func (s *ConnectSocket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
+func (s *ListenSocket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
 	if s.State == tcpip.TcpStateClosed {
 		return true
 	}
@@ -244,7 +205,7 @@ func (s *ConnectSocket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
 	return tcpPack.AckNumber >= s.sendUnack && tcpPack.AckNumber <= s.sendNext
 }
 
-func (s *ConnectSocket) cacheSendData(data []byte) int {
+func (s *ListenSocket) cacheSendData(data []byte) int {
 	send := 0
 	remain := s.sendBufferRemain()
 	if len(data) > remain {
@@ -258,7 +219,7 @@ func (s *ConnectSocket) cacheSendData(data []byte) int {
 	return send
 }
 
-func (s *ConnectSocket) sendBufferRemain() int {
+func (s *ListenSocket) sendBufferRemain() int {
 	// tail - 1 - head + 1
 	tail := int(s.sendNext) % len(s.sendBuffer)
 	head := int(s.sendUnack) % len(s.sendBuffer)

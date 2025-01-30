@@ -22,7 +22,9 @@ func TcpSocket() (fd int, err error) {
 	if defaultNetwork == nil {
 		return 0, NoNetworkErr
 	}
-	return defaultNetwork.applyListenSocket(), nil
+	sock := NewListenSocket(defaultNetwork)
+	fd = defaultNetwork.addFile(sock)
+	return fd, nil
 }
 
 func Bind(fd int, addr string) (err error) {
@@ -94,10 +96,8 @@ type Network struct {
 	tun     *tuntap.Tun
 	writeCh chan []byte
 	opt     NetworkOptions
-	// files   map[int]SockFile
-	// route   map[string]map[int]int // todo real route match
-	route sync.Map
-	files sync.Map
+	files   sync.Map
+	sockets sync.Map
 }
 
 func NewNetwork(
@@ -119,7 +119,7 @@ func NewNetwork(
 		ctx:     ctx,
 		tun:     tun,
 		files:   sync.Map{},
-		route:   sync.Map{},
+		sockets: sync.Map{},
 		writeCh: make(chan []byte),
 		opt:     opt,
 	}
@@ -200,14 +200,21 @@ func (n *Network) handle(data []byte) {
 		return
 	}
 	tcpPack := ipPack.Payload.(*tcpip.TcpPack)
-	sock, ok := n.getListenSocket(ipPack.DstIP, int(tcpPack.DstPort))
+	sock, ok := n.getSocket(
+		SocketAddr{
+			SrcIP:   ipPack.SrcIP.String(),
+			SrcPort: tcpPack.SrcPort,
+			DstIP:   ipPack.DstIP.String(),
+			DstPort: tcpPack.DstPort,
+		},
+	)
 	if !ok {
 		return
 	}
 	select {
 	case sock.writeCh <- ipPack:
 	default:
-		log.Printf("socket %s:%d is full,drop packet", sock.ip, sock.port)
+		log.Printf("socket %s:%d is full,drop packet", sock.localIP, sock.localPort)
 	}
 }
 
@@ -218,22 +225,21 @@ func (n *Network) bind(fd int, addr string) (err error) {
 	}
 	n.Lock()
 	defer n.Unlock()
-	sock, ok := n.getListenSocketByFd(fd)
+	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
-	_, ok = n.getListenSocket(ip, port)
-	if ok {
-		return fmt.Errorf("%w: %s", AlreadyInUseErr, addr)
-	}
-	sock.ip = ip
-	sock.port = port
-	n.registerSocket(fd, ip, port)
+	sock.localIP = ip
+	sock.localPort = port
+	n.registerSocket(fd, SocketAddr{
+		DstIP:   ip.String(),
+		DstPort: port,
+	})
 	return nil
 }
 
 func (n *Network) listen(fd int, backlog int) (err error) {
-	sock, ok := n.getListenSocketByFd(fd)
+	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
@@ -241,7 +247,7 @@ func (n *Network) listen(fd int, backlog int) (err error) {
 }
 
 func (n *Network) accept(fd int) (cfd int, err error) {
-	sock, ok := n.getListenSocketByFd(fd)
+	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return 0, fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
@@ -249,7 +255,7 @@ func (n *Network) accept(fd int) (cfd int, err error) {
 }
 
 func (n *Network) close(fd int) (err error) {
-	sock, ok := n.getConnectSocket(fd)
+	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
@@ -257,7 +263,7 @@ func (n *Network) close(fd int) (err error) {
 }
 
 func (n *Network) read(fd int) (data []byte, err error) {
-	sock, ok := n.getConnectSocket(fd)
+	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return nil, fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
@@ -265,7 +271,7 @@ func (n *Network) read(fd int) (data []byte, err error) {
 }
 
 func (n *Network) send(fd int, data []byte) (err error) {
-	sock, ok := n.getConnectSocket(fd)
+	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return fmt.Errorf("%w: %d", NoSocketErr, fd)
 	}
@@ -277,29 +283,35 @@ func (n *Network) connect(fd int, addr string) (err error) {
 	panic("not implemented")
 }
 
-func (n *Network) getSocketFd(ip net.IP, port int) (fd int, ok bool) {
-	ports, ok := n.route.Load(ip.String())
-	if !ok {
-		return 0, false
-	}
-	portsMap := ports.(*sync.Map)
-	value, ok := portsMap.Load(port)
+func (n *Network) getSocketFd(ip net.IP, port uint16) (fd int, ok bool) {
+	value, ok := n.sockets.Load(SocketAddr{
+		SrcIP:   ip.String(),
+		SrcPort: port,
+	})
 	if !ok {
 		return 0, false
 	}
 	return value.(int), true
 }
 
-func (n *Network) getListenSocket(ip net.IP, port int) (sock *ListenSocket, ok bool) {
-	fd, ok := n.getSocketFd(ip, port)
-	if !ok {
-		return nil, false
+func (n *Network) getSocket(addr SocketAddr) (sock *ListenSocket, ok bool) {
+	value, ok := n.sockets.Load(addr)
+	if ok {
+		return n.getSocketByFd(value.(int))
 	}
-	return n.getListenSocketByFd(fd)
+	newAddr := SocketAddr{
+		DstIP:   addr.DstIP,
+		DstPort: addr.DstPort,
+	}
+	value, ok = n.sockets.Load(newAddr)
+	if ok {
+		return n.getSocketByFd(value.(int))
+	}
+	return nil, false
 }
 
-func (n *Network) getListenSocketByFd(fd int) (sock *ListenSocket, ok bool) {
-	f, ok := n.files.Load(fd - 1)
+func (n *Network) getSocketByFd(fd int) (sock *ListenSocket, ok bool) {
+	f, ok := n.files.Load(fd)
 	if !ok {
 		return nil, false
 	}
@@ -307,50 +319,28 @@ func (n *Network) getListenSocketByFd(fd int) (sock *ListenSocket, ok bool) {
 	return sock, true
 }
 
-func (n *Network) getConnectSocket(fd int) (sock *ConnectSocket, ok bool) {
-	f, ok := n.files.Load(fd - 1)
-	if !ok {
-		return nil, false
-	}
-	sock = f.(*ConnectSocket)
-	return sock, true
+func (n *Network) registerSocket(fd int, addr SocketAddr) {
+	n.sockets.Store(addr, fd)
 }
 
-func (n *Network) registerSocket(fd int, ip net.IP, port int) {
-	ports, ok := n.route.Load(ip.String())
-	if !ok {
-		ports = &sync.Map{}
-		n.route.Store(ip.String(), ports)
-	}
-	portsMap := ports.(*sync.Map)
-	portsMap.Store(port, fd)
-}
-
-func (n *Network) applyListenSocket() (fd int) {
-	n.Lock()
-	defer n.Unlock()
+func (n *Network) applyFd() (fd int) {
 	for i := 0; ; i++ {
 		if _, ok := n.files.Load(i); !ok {
-			fd = i + 1
-			n.files.Store(i, NewListenSocket(n, fd))
+			fd = i
 			return fd
 		}
 	}
 }
 
-func (n *Network) addFile(f SockFile) (fd int) {
+func (n *Network) addFile(f *ListenSocket) (fd int) {
 	n.Lock()
 	defer n.Unlock()
-	for i := 0; ; i++ {
-		if _, ok := n.files.Load(i); !ok {
-			fd = i + 1
-			n.files.Store(i, f)
-			return fd
-		}
-	}
+	f.Fd = n.applyFd()
+	n.files.Store(f.Fd, f)
+	return f.Fd
 }
 
-func parseAddress(addr string) (ip net.IP, port int, err error) {
+func parseAddress(addr string) (ip net.IP, port uint16, err error) {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, 0, fmt.Errorf("invalid address %s: %w", addr, err)
@@ -365,7 +355,7 @@ func parseAddress(addr string) (ip net.IP, port int, err error) {
 	if err != nil || portNum < 0 || portNum > 65535 {
 		return nil, 0, fmt.Errorf("invalid port number: %s", portStr)
 	}
-	return ip, portNum, nil
+	return ip, uint16(portNum), nil
 }
 
 func debugPacket(prefix string, data []byte) {
