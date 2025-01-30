@@ -6,7 +6,7 @@ import (
 	"netstack/tcpip"
 )
 
-func (s *ListenSocket) Read() (data []byte, err error) {
+func (s *Socket) Read() (data []byte, err error) {
 	s.Lock()
 	if s.State == tcpip.TcpStateCloseWait {
 		return nil, io.EOF
@@ -19,11 +19,11 @@ func (s *ListenSocket) Read() (data []byte, err error) {
 	return data, nil
 }
 
-func (s *ListenSocket) Write(data []byte) (n int, err error) {
+func (s *Socket) Write(data []byte) (n int, err error) {
 	return s.send(data)
 }
 
-func (s *ListenSocket) send(data []byte) (n int, err error) {
+func (s *Socket) send(data []byte) (n int, err error) {
 	s.Lock()
 	defer s.Unlock()
 	send, resp, err := s.handleSend(data)
@@ -41,7 +41,7 @@ func (s *ListenSocket) send(data []byte) (n int, err error) {
 	return send, nil
 }
 
-func (s *ListenSocket) Close() error {
+func (s *Socket) Close() error {
 	var (
 		ipResp *tcpip.IPPack
 		err    error
@@ -69,7 +69,7 @@ func (s *ListenSocket) Close() error {
 	return nil
 }
 
-func (s *ListenSocket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
+func (s *Socket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
 	s.State = tcpip.TcpStateLastAck
 
 	tcpResp := &tcpip.TcpPack{
@@ -105,7 +105,7 @@ func (s *ListenSocket) passiveCloseSocket() (ipResp *tcpip.IPPack) {
 	return ipResp
 }
 
-func (s *ListenSocket) activeCloseSocket() (ipResp *tcpip.IPPack) {
+func (s *Socket) activeCloseSocket() (ipResp *tcpip.IPPack) {
 	s.State = tcpip.TcpStateFinWait1
 
 	tcpResp := &tcpip.TcpPack{
@@ -141,7 +141,7 @@ func (s *ListenSocket) activeCloseSocket() (ipResp *tcpip.IPPack) {
 	return ipResp
 }
 
-func (s *ListenSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, err error) {
+func (s *Socket) handleSend(data []byte) (send int, resp *tcpip.IPPack, err error) {
 	if s.State != tcpip.TcpStateEstablished {
 		return 0, nil, fmt.Errorf("connection not established")
 	}
@@ -189,7 +189,7 @@ func (s *ListenSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, er
 	return send, ipResp, nil
 }
 
-func (s *ListenSocket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
+func (s *Socket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
 	if s.State == tcpip.TcpStateClosed {
 		return true
 	}
@@ -205,7 +205,7 @@ func (s *ListenSocket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
 	return tcpPack.AckNumber >= s.sendUnack && tcpPack.AckNumber <= s.sendNext
 }
 
-func (s *ListenSocket) cacheSendData(data []byte) int {
+func (s *Socket) cacheSendData(data []byte) int {
 	send := 0
 	remain := s.sendBufferRemain()
 	if len(data) > remain {
@@ -219,7 +219,7 @@ func (s *ListenSocket) cacheSendData(data []byte) int {
 	return send
 }
 
-func (s *ListenSocket) sendBufferRemain() int {
+func (s *Socket) sendBufferRemain() int {
 	// tail - 1 - head + 1
 	tail := int(s.sendNext) % len(s.sendBuffer)
 	head := int(s.sendUnack) % len(s.sendBuffer)

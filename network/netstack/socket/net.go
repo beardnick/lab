@@ -294,7 +294,7 @@ func (n *Network) getSocketFd(ip net.IP, port uint16) (fd int, ok bool) {
 	return value.(int), true
 }
 
-func (n *Network) getSocket(addr SocketAddr) (sock *ListenSocket, ok bool) {
+func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
 	value, ok := n.sockets.Load(addr)
 	if ok {
 		return n.getSocketByFd(value.(int))
@@ -310,12 +310,12 @@ func (n *Network) getSocket(addr SocketAddr) (sock *ListenSocket, ok bool) {
 	return nil, false
 }
 
-func (n *Network) getSocketByFd(fd int) (sock *ListenSocket, ok bool) {
+func (n *Network) getSocketByFd(fd int) (sock *Socket, ok bool) {
 	f, ok := n.files.Load(fd)
 	if !ok {
 		return nil, false
 	}
-	sock = f.(*ListenSocket)
+	sock = f.(*Socket)
 	return sock, true
 }
 
@@ -332,7 +332,7 @@ func (n *Network) applyFd() (fd int) {
 	}
 }
 
-func (n *Network) addFile(f *ListenSocket) (fd int) {
+func (n *Network) addFile(f *Socket) (fd int) {
 	n.Lock()
 	defer n.Unlock()
 	f.Fd = n.applyFd()

@@ -16,17 +16,17 @@ type SocketAddr struct {
 	DstPort uint16
 }
 
-type ListenSocket struct {
+type Socket struct {
 	sync.Mutex
 	network        *Network
 	Fd             int
-	acceptQueue    chan *ListenSocket
+	acceptQueue    chan *Socket
 	synQueue       sync.Map
 	connectSockets sync.Map
 	readCh         chan []byte
 	writeCh        chan *tcpip.IPPack
 
-	listener   *ListenSocket
+	listener   *Socket
 	State      tcpip.TcpState
 	recvNext   uint32
 	sendNext   uint32
@@ -38,12 +38,12 @@ type ListenSocket struct {
 	localPort  uint16
 }
 
-func NewListenSocket(network *Network) *ListenSocket {
-	return &ListenSocket{
+func NewListenSocket(network *Network) *Socket {
+	return &Socket{
 		network:        network,
 		synQueue:       sync.Map{},
 		connectSockets: sync.Map{},
-		acceptQueue:    make(chan *ListenSocket, network.opt.Backlog),
+		acceptQueue:    make(chan *Socket, network.opt.Backlog),
 		readCh:         make(chan []byte),
 		writeCh:        make(chan *tcpip.IPPack),
 		State:          tcpip.TcpStateListen,
@@ -51,13 +51,13 @@ func NewListenSocket(network *Network) *ListenSocket {
 }
 
 func NewConnectSocket(
-	listenSocket *ListenSocket,
+	listenSocket *Socket,
 	localIP net.IP,
 	localPort uint16,
 	remoteIP net.IP,
 	remotePort uint16,
-) *ListenSocket {
-	return &ListenSocket{
+) *Socket {
+	return &Socket{
 		network:    listenSocket.network,
 		listener:   listenSocket,
 		localIP:    localIP,
@@ -71,25 +71,25 @@ func NewConnectSocket(
 	}
 }
 
-func (s *ListenSocket) Listen(backlog int) (err error) {
-	s.acceptQueue = make(chan *ListenSocket, backlog)
+func (s *Socket) Listen(backlog int) (err error) {
+	s.acceptQueue = make(chan *Socket, backlog)
 	go s.runloop()
 	return nil
 }
 
-func (s *ListenSocket) Accept() (cfd int, err error) {
+func (s *Socket) Accept() (cfd int, err error) {
 	cs := <-s.acceptQueue
 	return cs.Fd, nil
 }
 
-func (s *ListenSocket) runloop() {
+func (s *Socket) runloop() {
 	for data := range s.writeCh {
 		tcpPack := data.Payload.(*tcpip.TcpPack)
 		s.handle(data, tcpPack)
 	}
 }
 
-func (s *ListenSocket) handle(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
+func (s *Socket) handle(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 	s.Lock()
 	defer s.Unlock()
 	resp, err := s.handleState(ipPack, tcpPack)
@@ -108,7 +108,7 @@ func (s *ListenSocket) handle(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 	s.network.writeCh <- data
 }
 
-func (s *ListenSocket) handleState(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleState(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	switch s.State {
 	case tcpip.TcpStateListen:
 		s.handleNewPacket(ipPack, tcpPack)
@@ -155,7 +155,7 @@ func (s *ListenSocket) handleState(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack)
 	return resp, err
 }
 
-func (s *ListenSocket) handleNewPacket(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
+func (s *Socket) handleNewPacket(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 	sock := NewConnectSocket(
 		s,
 		ipPack.DstIP,
@@ -167,7 +167,7 @@ func (s *ListenSocket) handleNewPacket(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpP
 	sock.handle(ipPack, tcpPack)
 }
 
-func (s *ListenSocket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	s.State = tcpip.TcpStateSynReceived
 	s.recvNext = tcpPack.SequenceNumber + 1
 	s.listener.synQueue.Store(tcpPack.DstPort, s)
@@ -220,7 +220,7 @@ func (s *ListenSocket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, er
 	return ipResp, nil
 }
 
-func (s *ListenSocket) handleFirstAck(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleFirstAck(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	s.State = tcpip.TcpStateEstablished
 	s.sendUnack = tcpPack.AckNumber
 	s.synQueue.Delete(s.remotePort)
@@ -232,7 +232,7 @@ func (s *ListenSocket) handleFirstAck(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPac
 	return nil, nil
 }
 
-func (s *ListenSocket) handleData(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleData(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	if tcpPack.Flags&uint8(tcpip.TcpACK) != 0 {
 		s.sendUnack = tcpPack.AckNumber
 	}
@@ -284,7 +284,7 @@ func (s *ListenSocket) handleData(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, e
 	return ipResp, nil
 }
 
-func (s *ListenSocket) handleFin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleFin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	s.recvNext += 1
 	s.State = tcpip.TcpStateCloseWait
 	tcpResp := &tcpip.TcpPack{
@@ -318,7 +318,7 @@ func (s *ListenSocket) handleFin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, er
 	return ipResp, nil
 }
 
-func (s *ListenSocket) handleLastAck() {
+func (s *Socket) handleLastAck() {
 	s.State = tcpip.TcpStateClosed
 	s.connectSockets.Delete(fmt.Sprintf(
 		"%s:%d->%s:%d",
@@ -329,7 +329,7 @@ func (s *ListenSocket) handleLastAck() {
 	))
 }
 
-func (s *ListenSocket) handleFinWait1(
+func (s *Socket) handleFinWait1(
 	tcpPack *tcpip.TcpPack,
 ) (resp *tcpip.IPPack, err error) {
 	if tcpPack.Flags&uint8(tcpip.TcpACK) != 0 {
@@ -341,7 +341,7 @@ func (s *ListenSocket) handleFinWait1(
 	return s.handleFinWait2Fin(tcpPack)
 }
 
-func (s *ListenSocket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	if tcpPack.Flags&uint8(tcpip.TcpFIN) == 0 {
 		return s.handleData(tcpPack)
 	}
