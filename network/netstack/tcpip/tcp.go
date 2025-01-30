@@ -191,3 +191,20 @@ func InspectFlags(flags uint8) []string {
 	}
 	return flagList
 }
+
+var stateMap = map[TcpState]string{
+	TcpStateClosed:      "CLOSED",
+	TcpStateListen:      "LISTEN",
+	TcpStateSynSent:     "SYN_SENT",
+	TcpStateSynReceived: "SYN_RECEIVED",
+	TcpStateEstablished: "ESTABLISHED",
+	TcpStateFinWait1:    "FIN_WAIT_1",
+	TcpStateFinWait2:    "FIN_WAIT_2",
+	TcpStateCloseWait:   "CLOSE_WAIT",
+	TcpStateLastAck:     "LAST_ACK",
+	TcpStateTimeWait:    "TIME_WAIT",
+}
+
+func (s *TcpState) String() string {
+	return stateMap[*s]
+}

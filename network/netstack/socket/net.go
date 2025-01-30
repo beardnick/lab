@@ -61,7 +61,10 @@ func Send(fd int, data []byte) (err error) {
 }
 
 func Connect(fd int, addr string) (err error) {
-	panic("not implemented")
+	if defaultNetwork == nil {
+		return NoNetworkErr
+	}
+	return defaultNetwork.connect(fd, addr)
 }
 
 func Close(fd int) (err error) {
@@ -268,6 +271,10 @@ func (n *Network) send(fd int, data []byte) (err error) {
 	}
 	_, err = sock.Write(data)
 	return err
+}
+
+func (n *Network) connect(fd int, addr string) (err error) {
+	panic("not implemented")
 }
 
 func (n *Network) getSocketFd(ip net.IP, port int) (fd int, ok bool) {
