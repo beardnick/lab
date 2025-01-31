@@ -159,8 +159,9 @@ func TestSocketServer(t *testing.T) {
 			nil,
 		)
 
-		finResp := sock.passiveCloseSocket()
-		_, err := finResp.Encode()
+		finResp, err := sock.passiveCloseSocket()
+		assert.Nil(t, err)
+		_, err = finResp.Encode()
 		assert.Nil(t, err)
 		assert.Equal(t, wantFinResp, finResp)
 	}
@@ -316,8 +317,9 @@ func TestSocketClient(t *testing.T) {
 			nil,
 		)
 
-		finResp := connectSock.passiveCloseSocket()
-		_, err := finResp.Encode()
+		finResp, err := connectSock.passiveCloseSocket()
+		assert.Nil(t, err)
+		_, err = finResp.Encode()
 		assert.Nil(t, err)
 		assert.Equal(t, wantFinResp, finResp)
 	}
@@ -340,8 +342,8 @@ func (e *endpoint) pack(
 ) (ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 	ipPack = &tcpip.IPPack{
 		IPHeader: &tcpip.IPHeader{
-			SrcIP:          net.ParseIP(e.ip),
-			DstIP:          net.ParseIP(dstIp),
+			SrcIP:          net.ParseIP(e.ip).To4(),
+			DstIP:          net.ParseIP(dstIp).To4(),
 			Version:        4,
 			HeaderLength:   0,
 			TypeOfService:  0,
@@ -358,8 +360,8 @@ func (e *endpoint) pack(
 
 	tcpPack = &tcpip.TcpPack{
 		PseudoHeader: &tcpip.PseudoHeader{
-			SrcIP: net.ParseIP(e.ip),
-			DstIP: net.ParseIP(dstIp),
+			SrcIP: net.ParseIP(e.ip).To4(),
+			DstIP: net.ParseIP(dstIp).To4(),
 		},
 		TcpHeader: &tcpip.TcpHeader{
 			SrcPort:        e.port,

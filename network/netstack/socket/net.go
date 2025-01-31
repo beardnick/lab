@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -229,7 +230,7 @@ func (n *Network) bind(fd int, addr string) (err error) {
 	if !ok {
 		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
-	sock.localIP = ip
+	sock.localIP = ip.String()
 	sock.localPort = port
 	n.bindSocket(SocketAddr{
 		DstIP:   ip.String(),
@@ -343,7 +344,7 @@ func parseAddress(addr string) (ip net.IP, port uint16, err error) {
 		return nil, 0, fmt.Errorf("invalid address %s: %w", addr, err)
 	}
 
-	ip = net.ParseIP(host)
+	ip = net.ParseIP(host).To4()
 	if ip == nil {
 		return nil, 0, fmt.Errorf("invalid ip address: %s", host)
 	}
@@ -375,7 +376,7 @@ func debugPacket(prefix string, data []byte) {
 		return
 	}
 	log.Printf(
-		"%s %s:%d -> %s:%d %v seq=%d ack=%d len=%d\n",
+		"%s %s:%d -> %s:%d %v seq=%d ack=%d len=%d %s\n",
 		prefix,
 		ipPack.SrcIP,
 		tcpPack.SrcPort,
@@ -385,5 +386,6 @@ func debugPacket(prefix string, data []byte) {
 		tcpPack.SequenceNumber,
 		tcpPack.AckNumber,
 		len(payload),
+		hex.Dump(payload),
 	)
 }
