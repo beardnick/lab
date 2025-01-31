@@ -80,6 +80,8 @@ func (s *Socket) Listen(backlog int) (err error) {
 
 func (s *Socket) Accept() (cfd int, err error) {
 	cs := <-s.acceptQueue
+	cs.Lock()
+	defer cs.Unlock()
 	return cs.fd, nil
 }
 
@@ -93,6 +95,16 @@ func (s *Socket) runloop() {
 func (s *Socket) handle(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 	s.Lock()
 	defer s.Unlock()
+	if s.network.opt.Debug {
+		log.Printf(
+			"handle %s:%d => %s:%d %s",
+			ipPack.SrcIP,
+			tcpPack.SrcPort,
+			ipPack.DstIP,
+			tcpPack.DstPort,
+			s.State.String(),
+		)
+	}
 	resp, err := s.handleState(ipPack, tcpPack)
 	if err != nil {
 		log.Println(err)
@@ -112,7 +124,7 @@ func (s *Socket) handle(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
 func (s *Socket) handleState(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	switch s.State {
 	case tcpip.TcpStateListen:
-		s.handleNewPacket(ipPack, tcpPack)
+		s.handleNewSocket(ipPack, tcpPack)
 	default:
 		if !s.checkSeqAck(tcpPack) {
 			return nil, fmt.Errorf(
@@ -156,15 +168,20 @@ func (s *Socket) handleState(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) (resp
 	return resp, err
 }
 
-func (s *Socket) handleNewPacket(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
-	sock := NewConnectSocket(
-		s,
-		ipPack.DstIP,
-		tcpPack.DstPort,
-		ipPack.SrcIP,
-		tcpPack.SrcPort,
-	)
-	go sock.runloop()
+func (s *Socket) handleNewSocket(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) {
+	value, ok := s.synQueue.Load(tcpPack.DstPort)
+	var sock *Socket
+	if ok {
+		sock = value.(*Socket)
+	} else {
+		sock = NewConnectSocket(
+			s,
+			ipPack.DstIP,
+			tcpPack.DstPort,
+			ipPack.SrcIP,
+			tcpPack.SrcPort,
+		)
+	}
 	sock.handle(ipPack, tcpPack)
 }
 
@@ -210,14 +227,6 @@ func (s *Socket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err erro
 	s.sendUnack = tcpResp.SequenceNumber
 	s.sendNext = tcpResp.SequenceNumber + 1
 
-	s.network.addSocket(s)
-	s.network.bindSocket(SocketAddr{
-		SrcIP:   s.remoteIP.String(),
-		SrcPort: s.remotePort,
-		DstIP:   s.localIP.String(),
-		DstPort: s.localPort,
-	}, s.fd)
-
 	return ipResp, nil
 }
 
@@ -230,6 +239,15 @@ func (s *Socket) handleFirstAck(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err
 	default:
 		return nil, fmt.Errorf("accept queue is full, drop connection")
 	}
+
+	s.network.addSocket(s)
+	s.network.bindSocket(SocketAddr{
+		SrcIP:   s.remoteIP.String(),
+		SrcPort: s.remotePort,
+		DstIP:   s.localIP.String(),
+		DstPort: s.localPort,
+	}, s.fd)
+	go s.runloop()
 	return nil, nil
 }
 
