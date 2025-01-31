@@ -20,66 +20,66 @@ type SockFile interface {
 
 func TcpSocket() (fd int, err error) {
 	if defaultNetwork == nil {
-		return 0, NoNetworkErr
+		return 0, ErrNoNetwork
 	}
 	sock := NewListenSocket(defaultNetwork)
-	fd = defaultNetwork.addFile(sock)
+	fd = defaultNetwork.addSocket(sock)
 	return fd, nil
 }
 
 func Bind(fd int, addr string) (err error) {
 	if defaultNetwork == nil {
-		return NoNetworkErr
+		return ErrNoNetwork
 	}
 	return defaultNetwork.bind(fd, addr)
 }
 
 func Listen(fd int, backlog int) (err error) {
 	if defaultNetwork == nil {
-		return NoNetworkErr
+		return ErrNoNetwork
 	}
 	return defaultNetwork.listen(fd, backlog)
 }
 
 func Accept(fd int) (cfd int, err error) {
 	if defaultNetwork == nil {
-		return 0, NoNetworkErr
+		return 0, ErrNoNetwork
 	}
 	return defaultNetwork.accept(fd)
 }
 
 func Read(fd int) (data []byte, err error) {
 	if defaultNetwork == nil {
-		return nil, NoNetworkErr
+		return nil, ErrNoNetwork
 	}
 	return defaultNetwork.read(fd)
 }
 
 func Send(fd int, data []byte) (err error) {
 	if defaultNetwork == nil {
-		return NoNetworkErr
+		return ErrNoNetwork
 	}
 	return defaultNetwork.send(fd, data)
 }
 
 func Connect(fd int, addr string) (err error) {
 	if defaultNetwork == nil {
-		return NoNetworkErr
+		return ErrNoNetwork
 	}
 	return defaultNetwork.connect(fd, addr)
 }
 
 func Close(fd int) (err error) {
 	if defaultNetwork == nil {
-		return NoNetworkErr
+		return ErrNoNetwork
 	}
 	return defaultNetwork.close(fd)
 }
 
 var (
-	NoNetworkErr    = errors.New("no network setup")
-	AlreadyInUseErr = errors.New("address already in use")
-	NoSocketErr     = errors.New("no socket")
+	ErrNoNetwork    = errors.New("no network setup")
+	ErrAlreadyInUse = errors.New("address already in use")
+	ErrNoSocket     = errors.New("no socket")
 )
 
 type NetworkOptions struct {
@@ -92,12 +92,12 @@ type NetworkOptions struct {
 
 type Network struct {
 	sync.Mutex
-	ctx     context.Context
-	tun     *tuntap.Tun
-	writeCh chan []byte
-	opt     NetworkOptions
-	files   sync.Map
-	sockets sync.Map
+	ctx       context.Context
+	tun       *tuntap.Tun
+	writeCh   chan []byte
+	opt       NetworkOptions
+	sockets   sync.Map
+	socketFds sync.Map
 }
 
 func NewNetwork(
@@ -116,12 +116,12 @@ func NewNetwork(
 	}
 
 	return &Network{
-		ctx:     ctx,
-		tun:     tun,
-		files:   sync.Map{},
-		sockets: sync.Map{},
-		writeCh: make(chan []byte),
-		opt:     opt,
+		ctx:       ctx,
+		tun:       tun,
+		sockets:   sync.Map{},
+		socketFds: sync.Map{},
+		writeCh:   make(chan []byte),
+		opt:       opt,
 	}
 }
 
@@ -227,21 +227,21 @@ func (n *Network) bind(fd int, addr string) (err error) {
 	defer n.Unlock()
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return fmt.Errorf("%w: %d", NoSocketErr, fd)
+		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	sock.localIP = ip
 	sock.localPort = port
-	n.registerSocket(fd, SocketAddr{
+	n.bindSocket(SocketAddr{
 		DstIP:   ip.String(),
 		DstPort: port,
-	})
+	}, fd)
 	return nil
 }
 
 func (n *Network) listen(fd int, backlog int) (err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return fmt.Errorf("%w: %d", NoSocketErr, fd)
+		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	return sock.Listen(backlog)
 }
@@ -249,7 +249,7 @@ func (n *Network) listen(fd int, backlog int) (err error) {
 func (n *Network) accept(fd int) (cfd int, err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return 0, fmt.Errorf("%w: %d", NoSocketErr, fd)
+		return 0, fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	return sock.Accept()
 }
@@ -257,7 +257,7 @@ func (n *Network) accept(fd int) (cfd int, err error) {
 func (n *Network) close(fd int) (err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return fmt.Errorf("%w: %d", NoSocketErr, fd)
+		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	return sock.Close()
 }
@@ -265,7 +265,7 @@ func (n *Network) close(fd int) (err error) {
 func (n *Network) read(fd int) (data []byte, err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return nil, fmt.Errorf("%w: %d", NoSocketErr, fd)
+		return nil, fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	return sock.Read()
 }
@@ -273,7 +273,7 @@ func (n *Network) read(fd int) (data []byte, err error) {
 func (n *Network) send(fd int, data []byte) (err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return fmt.Errorf("%w: %d", NoSocketErr, fd)
+		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	_, err = sock.Write(data)
 	return err
@@ -283,19 +283,8 @@ func (n *Network) connect(fd int, addr string) (err error) {
 	panic("not implemented")
 }
 
-func (n *Network) getSocketFd(ip net.IP, port uint16) (fd int, ok bool) {
-	value, ok := n.sockets.Load(SocketAddr{
-		SrcIP:   ip.String(),
-		SrcPort: port,
-	})
-	if !ok {
-		return 0, false
-	}
-	return value.(int), true
-}
-
 func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
-	value, ok := n.sockets.Load(addr)
+	value, ok := n.socketFds.Load(addr)
 	if ok {
 		return n.getSocketByFd(value.(int))
 	}
@@ -303,7 +292,7 @@ func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
 		DstIP:   addr.DstIP,
 		DstPort: addr.DstPort,
 	}
-	value, ok = n.sockets.Load(newAddr)
+	value, ok = n.socketFds.Load(newAddr)
 	if ok {
 		return n.getSocketByFd(value.(int))
 	}
@@ -311,7 +300,7 @@ func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
 }
 
 func (n *Network) getSocketByFd(fd int) (sock *Socket, ok bool) {
-	f, ok := n.files.Load(fd)
+	f, ok := n.sockets.Load(fd)
 	if !ok {
 		return nil, false
 	}
@@ -319,25 +308,33 @@ func (n *Network) getSocketByFd(fd int) (sock *Socket, ok bool) {
 	return sock, true
 }
 
-func (n *Network) registerSocket(fd int, addr SocketAddr) {
-	n.sockets.Store(addr, fd)
+func (n *Network) bindSocket(addr SocketAddr, fd int) {
+	n.socketFds.Store(addr, fd)
+}
+
+func (n *Network) unbindSocket(addr SocketAddr) {
+	n.socketFds.Delete(addr)
 }
 
 func (n *Network) applyFd() (fd int) {
 	for i := 0; ; i++ {
-		if _, ok := n.files.Load(i); !ok {
+		if _, ok := n.sockets.Load(i); !ok {
 			fd = i
 			return fd
 		}
 	}
 }
 
-func (n *Network) addFile(f *Socket) (fd int) {
+func (n *Network) addSocket(f *Socket) (fd int) {
 	n.Lock()
 	defer n.Unlock()
-	f.Fd = n.applyFd()
-	n.files.Store(f.Fd, f)
-	return f.Fd
+	f.fd = n.applyFd()
+	n.sockets.Store(f.fd, f)
+	return f.fd
+}
+
+func (n *Network) removeSocket(fd int) {
+	n.sockets.Delete(fd)
 }
 
 func parseAddress(addr string) (ip net.IP, port uint16, err error) {

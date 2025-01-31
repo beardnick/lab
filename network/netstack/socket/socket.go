@@ -18,35 +18,36 @@ type SocketAddr struct {
 
 type Socket struct {
 	sync.Mutex
-	network        *Network
-	Fd             int
-	acceptQueue    chan *Socket
-	synQueue       sync.Map
-	connectSockets sync.Map
-	readCh         chan []byte
-	writeCh        chan *tcpip.IPPack
+	fd int
+
+	localIP    net.IP
+	remoteIP   net.IP
+	localPort  uint16
+	remotePort uint16
+
+	network     *Network
+	acceptQueue chan *Socket
+	synQueue    sync.Map
+	readCh      chan []byte
+	writeCh     chan *tcpip.IPPack
 
 	listener   *Socket
-	State      tcpip.TcpState
 	recvNext   uint32
 	sendNext   uint32
 	sendUnack  uint32
 	sendBuffer []byte
-	remoteIP   net.IP
-	localIP    net.IP
-	remotePort uint16
-	localPort  uint16
+
+	State tcpip.TcpState
 }
 
 func NewListenSocket(network *Network) *Socket {
 	return &Socket{
-		network:        network,
-		synQueue:       sync.Map{},
-		connectSockets: sync.Map{},
-		acceptQueue:    make(chan *Socket, network.opt.Backlog),
-		readCh:         make(chan []byte),
-		writeCh:        make(chan *tcpip.IPPack),
-		State:          tcpip.TcpStateListen,
+		network:     network,
+		synQueue:    sync.Map{},
+		acceptQueue: make(chan *Socket, network.opt.Backlog),
+		readCh:      make(chan []byte),
+		writeCh:     make(chan *tcpip.IPPack),
+		State:       tcpip.TcpStateListen,
 	}
 }
 
@@ -79,7 +80,7 @@ func (s *Socket) Listen(backlog int) (err error) {
 
 func (s *Socket) Accept() (cfd int, err error) {
 	cs := <-s.acceptQueue
-	return cs.Fd, nil
+	return cs.fd, nil
 }
 
 func (s *Socket) runloop() {
@@ -134,7 +135,7 @@ func (s *Socket) handleState(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack) (resp
 			}
 		case tcpip.TcpStateEstablished:
 			if tcpPack.Flags&uint8(tcpip.TcpFIN) != 0 {
-				resp, err = s.handleFin(tcpPack)
+				resp, err = s.handleFin()
 				return
 			}
 			resp, err = s.handleData(tcpPack)
@@ -209,13 +210,13 @@ func (s *Socket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err erro
 	s.sendUnack = tcpResp.SequenceNumber
 	s.sendNext = tcpResp.SequenceNumber + 1
 
-	s.network.addFile(s)
-	s.network.registerSocket(s.Fd, SocketAddr{
+	s.network.addSocket(s)
+	s.network.bindSocket(SocketAddr{
 		SrcIP:   s.remoteIP.String(),
 		SrcPort: s.remotePort,
 		DstIP:   s.localIP.String(),
 		DstPort: s.localPort,
-	})
+	}, s.fd)
 
 	return ipResp, nil
 }
@@ -284,7 +285,7 @@ func (s *Socket) handleData(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err err
 	return ipResp, nil
 }
 
-func (s *Socket) handleFin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
+func (s *Socket) handleFin() (resp *tcpip.IPPack, err error) {
 	s.recvNext += 1
 	s.State = tcpip.TcpStateCloseWait
 	tcpResp := &tcpip.TcpPack{
@@ -320,13 +321,13 @@ func (s *Socket) handleFin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err erro
 
 func (s *Socket) handleLastAck() {
 	s.State = tcpip.TcpStateClosed
-	s.connectSockets.Delete(fmt.Sprintf(
-		"%s:%d->%s:%d",
-		s.remoteIP,
-		s.remotePort,
-		s.localIP,
-		s.localPort,
-	))
+	s.network.removeSocket(s.fd)
+	s.network.unbindSocket(SocketAddr{
+		SrcIP:   s.remoteIP.String(),
+		SrcPort: s.remotePort,
+		DstIP:   s.localIP.String(),
+		DstPort: s.localPort,
+	})
 }
 
 func (s *Socket) handleFinWait1(
@@ -391,13 +392,12 @@ func (s *Socket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, 
 	}
 
 	s.State = tcpip.TcpStateClosed
-	s.connectSockets.Delete(fmt.Sprintf(
-		"%s:%d->%s:%d",
-		s.remoteIP,
-		s.remotePort,
-		s.localIP,
-		s.localPort,
-	))
-
+	s.network.removeSocket(s.fd)
+	s.network.unbindSocket(SocketAddr{
+		SrcIP:   s.remoteIP.String(),
+		SrcPort: s.remotePort,
+		DstIP:   s.localIP.String(),
+		DstPort: s.localPort,
+	})
 	return ipResp, nil
 }

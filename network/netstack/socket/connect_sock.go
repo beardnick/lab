@@ -55,9 +55,6 @@ func (s *Socket) Close() error {
 	} else {
 		return fmt.Errorf("wrong state %s", s.State.String())
 	}
-	if err != nil {
-		return err
-	}
 
 	data, err := ipResp.Encode()
 	if err != nil {
