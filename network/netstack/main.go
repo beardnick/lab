@@ -31,7 +31,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = socket.Bind(serverFd, "10.0.0.2:8080")
+	hostAddr := "10.0.0.2:8080"
+	err = socket.Bind(serverFd, hostAddr)
 	if err != nil {
 		panic(err)
 	}
@@ -39,7 +40,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("server start success %d\n", serverFd)
+	fmt.Printf("server start success %d, listen on: %s\n", serverFd, hostAddr)
 	for {
 		fmt.Println("accepting...")
 		connFd, err := socket.Accept(serverFd)
@@ -52,6 +53,7 @@ func main() {
 }
 
 func handleConn(connFd int) {
+	defer socket.Close(connFd)
 	fmt.Printf("connected with:%d\n", connFd)
 	wg := sync.WaitGroup{}
 	wg.Add(2)

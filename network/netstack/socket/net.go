@@ -11,6 +11,7 @@ import (
 	"netstack/tuntap"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type SockFile interface {
@@ -23,7 +24,7 @@ func TcpSocket() (fd int, err error) {
 	if defaultNetwork == nil {
 		return 0, ErrNoNetwork
 	}
-	sock := NewListenSocket(defaultNetwork)
+	sock := NewSocket(defaultNetwork)
 	fd = defaultNetwork.addSocket(sock)
 	return fd, nil
 }
@@ -49,6 +50,13 @@ func Accept(fd int) (cfd int, err error) {
 	return defaultNetwork.accept(fd)
 }
 
+func AcceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
+	if defaultNetwork == nil {
+		return 0, ErrNoNetwork
+	}
+	return defaultNetwork.acceptWithTimeout(fd, timeout)
+}
+
 func Read(fd int) (data []byte, err error) {
 	if defaultNetwork == nil {
 		return nil, ErrNoNetwork
@@ -63,11 +71,11 @@ func Send(fd int, data []byte) (err error) {
 	return defaultNetwork.send(fd, data)
 }
 
-func Connect(fd int, addr string) (err error) {
+func Connect(fd int, serverAddr string) (err error) {
 	if defaultNetwork == nil {
 		return ErrNoNetwork
 	}
-	return defaultNetwork.connect(fd, addr)
+	return defaultNetwork.connect(fd, serverAddr)
 }
 
 func Close(fd int) (err error) {
@@ -126,6 +134,10 @@ func NewNetwork(
 	}
 }
 
+func NetworkInitialized() bool {
+	return defaultNetwork != nil
+}
+
 func SetupDefaultNetwork(ctx context.Context, tun *tuntap.Tun, opt NetworkOptions) {
 	defaultNetwork = NewNetwork(ctx, tun, opt)
 	defaultNetwork.runloop()
@@ -134,11 +146,15 @@ func SetupDefaultNetwork(ctx context.Context, tun *tuntap.Tun, opt NetworkOption
 var defaultNetwork *Network
 
 func (n *Network) runloop() {
-	go n.readloop()
-	go n.writeloop()
+	started := sync.WaitGroup{}
+	started.Add(2)
+	go n.readloop(&started)
+	go n.writeloop(&started)
+	started.Wait()
 }
 
-func (n *Network) readloop() {
+func (n *Network) readloop(started *sync.WaitGroup) {
+	started.Done()
 	for {
 		select {
 		case <-n.ctx.Done():
@@ -159,7 +175,8 @@ func (n *Network) readloop() {
 	}
 }
 
-func (n *Network) writeloop() {
+func (n *Network) writeloop(started *sync.WaitGroup) {
+	started.Done()
 	for {
 		select {
 		case data := <-n.writeCh:
@@ -212,6 +229,13 @@ func (n *Network) handle(data []byte) {
 	if !ok {
 		return
 	}
+	sock.Lock()
+	if sock.State == tcpip.TcpStateUnInitialized {
+		log.Printf("socket %s:%d is not initialized,drop packet", sock.localIP, sock.localPort)
+		sock.Unlock()
+		return
+	}
+	sock.Unlock()
 	select {
 	case sock.writeCh <- ipPack:
 	default:
@@ -244,6 +268,7 @@ func (n *Network) listen(fd int, backlog int) (err error) {
 	if !ok {
 		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
+	InitListenSocket(sock)
 	return sock.Listen(backlog)
 }
 
@@ -253,6 +278,14 @@ func (n *Network) accept(fd int) (cfd int, err error) {
 		return 0, fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	return sock.Accept()
+}
+
+func (n *Network) acceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
+	sock, ok := n.getSocketByFd(fd)
+	if !ok {
+		return 0, fmt.Errorf("%w: %d", ErrNoSocket, fd)
+	}
+	return sock.AcceptWithTimeout(timeout)
 }
 
 func (n *Network) close(fd int) (err error) {
@@ -280,8 +313,47 @@ func (n *Network) send(fd int, data []byte) (err error) {
 	return err
 }
 
-func (n *Network) connect(fd int, addr string) (err error) {
-	panic("not implemented")
+func (n *Network) connect(fd int, serverAddr string) (err error) {
+	serverIP, serverPort, err := parseAddress(serverAddr)
+	if err != nil {
+		return err
+	}
+	n.Lock()
+	defer n.Unlock()
+	sock, ok := n.getSocketByFd(fd)
+	if !ok {
+		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
+	}
+	var addr SocketAddr
+	if sock.localIP == "" && sock.localPort == 0 {
+		addr, err = n.getAvailableAddress()
+		if err != nil {
+			return err
+		}
+		sock.localIP = addr.DstIP
+		sock.localPort = addr.DstPort
+	} else {
+		n.unbindSocket(SocketAddr{
+			DstIP:   sock.localIP,
+			DstPort: sock.localPort,
+		})
+		addr = SocketAddr{
+			DstIP:   sock.localIP,
+			DstPort: sock.localPort,
+		}
+	}
+	addr.SrcIP = serverIP.String()
+	addr.SrcPort = serverPort
+	n.bindSocket(addr, fd)
+	InitConnectSocket(
+		sock,
+		nil,
+		net.ParseIP(sock.localIP),
+		sock.localPort,
+		serverIP,
+		serverPort,
+	)
+	return sock.Connect()
 }
 
 func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
@@ -317,8 +389,27 @@ func (n *Network) unbindSocket(addr SocketAddr) {
 	n.socketFds.Delete(addr)
 }
 
+func (n *Network) getAvailableAddress() (addr SocketAddr, err error) {
+	// todo: use a better algorithm to find a available address
+	ip := n.tun.IP()
+	ip = ip.To4()
+	ip[3]++
+	localIp := ip.String()
+	var p uint16
+	for p = 1; p < 65535; p++ {
+		if _, ok := n.socketFds.Load(SocketAddr{DstIP: localIp, DstPort: p}); !ok {
+			return SocketAddr{
+				DstIP:   localIp,
+				DstPort: p,
+			}, nil
+		}
+	}
+	return SocketAddr{}, fmt.Errorf("no available address")
+}
+
 func (n *Network) applyFd() (fd int) {
-	for i := 0; ; i++ {
+	// todo: use a better algorithm to find a available fd
+	for i := 1; ; i++ {
 		if _, ok := n.sockets.Load(i); !ok {
 			fd = i
 			return fd

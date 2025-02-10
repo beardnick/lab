@@ -21,7 +21,8 @@ const (
 type TcpState uint8
 
 const (
-	TcpStateClosed TcpState = iota
+	TcpStateUnInitialized TcpState = iota
+	TcpStateClosed
 	TcpStateListen
 	TcpStateSynSent
 	TcpStateSynReceived

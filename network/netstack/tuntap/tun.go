@@ -1,6 +1,7 @@
 package tuntap
 
 import (
+	"net"
 	"os/exec"
 	"syscall"
 )
@@ -8,6 +9,8 @@ import (
 type Tun struct {
 	name string
 	fd   int
+	ip   net.IP
+	cidr net.IPNet
 }
 
 func NewTun(name, cidr string) (*Tun, error) {
@@ -15,7 +18,11 @@ func NewTun(name, cidr string) (*Tun, error) {
 	if err != nil {
 		return nil, err
 	}
-	tun := &Tun{name: name, fd: fd}
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, err
+	}
+	tun := &Tun{name: name, fd: fd, ip: ip, cidr: *ipNet}
 
 	_, err = exec.Command("ip", "addr", "add", cidr, "dev", name).CombinedOutput()
 	if err != nil {
@@ -39,4 +46,12 @@ func (t *Tun) Write(b []byte) (n int, err error) {
 
 func (t *Tun) Close() error {
 	return syscall.Close(t.fd)
+}
+
+func (t *Tun) IP() net.IP {
+	return t.ip
+}
+
+func (t *Tun) CIDR() net.IPNet {
+	return t.cidr
 }

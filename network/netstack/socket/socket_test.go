@@ -28,9 +28,13 @@ func TestSocketServer(t *testing.T) {
 		serverSeq: 1,
 	}
 
-	l := NewListenSocket(NewNetwork(context.Background(), nil, NetworkOptions{Seq: args.serverSeq}))
-	sock := NewConnectSocket(
-		l,
+	listenSock := NewSocket(NewNetwork(context.Background(), nil, NetworkOptions{Seq: args.serverSeq}))
+	InitListenSocket(listenSock)
+
+	connectSock := NewSocket(listenSock.network)
+	InitConnectSocket(
+		connectSock,
+		listenSock,
 		net.ParseIP(args.dstIp),
 		args.dstPort,
 		net.ParseIP(args.srcIp),
@@ -63,12 +67,12 @@ func TestSocketServer(t *testing.T) {
 			nil,
 		)
 
-		synResp, err := sock.handleState(synIPPack, synIPPack.Payload.(*tcpip.TcpPack))
+		synResp, err := connectSock.handleState(synIPPack, synIPPack.Payload.(*tcpip.TcpPack))
 		assert.Nil(t, err)
 		_, err = synResp.Encode()
 		assert.Nil(t, err)
 		assert.Equal(t, synRespIPPack, synResp)
-		assert.Equal(t, sock.State, tcpip.TcpStateSynReceived)
+		assert.Equal(t, connectSock.State, tcpip.TcpStateSynReceived)
 	}
 
 	// c -> ack -> s
@@ -82,10 +86,10 @@ func TestSocketServer(t *testing.T) {
 			1024,
 			nil,
 		)
-		ackResp, err := sock.handleState(ackPack, ackPack.Payload.(*tcpip.TcpPack))
+		ackResp, err := connectSock.handleState(ackPack, ackPack.Payload.(*tcpip.TcpPack))
 		assert.Nil(t, err)
 		assert.Nil(t, ackResp)
-		assert.Equal(t, sock.State, tcpip.TcpStateEstablished)
+		assert.Equal(t, connectSock.State, tcpip.TcpStateEstablished)
 	}
 
 	// c -> data -> s
@@ -111,7 +115,7 @@ func TestSocketServer(t *testing.T) {
 		)
 
 		// ack data
-		dataResp, err := sock.handleState(dataIPPack, dataIPPack.Payload.(*tcpip.TcpPack))
+		dataResp, err := connectSock.handleState(dataIPPack, dataIPPack.Payload.(*tcpip.TcpPack))
 		assert.Nil(t, err)
 		_, err = dataResp.Encode()
 		assert.Nil(t, err)
@@ -140,7 +144,7 @@ func TestSocketServer(t *testing.T) {
 			nil,
 		)
 
-		finAckResp, err := sock.handleState(finPack, finPack.Payload.(*tcpip.TcpPack))
+		finAckResp, err := connectSock.handleState(finPack, finPack.Payload.(*tcpip.TcpPack))
 		assert.Nil(t, err)
 		_, err = finAckResp.Encode()
 		assert.Nil(t, err)
@@ -159,7 +163,7 @@ func TestSocketServer(t *testing.T) {
 			nil,
 		)
 
-		finResp, err := sock.passiveCloseSocket()
+		finResp, err := connectSock.passiveCloseSocket()
 		assert.Nil(t, err)
 		_, err = finResp.Encode()
 		assert.Nil(t, err)
@@ -186,8 +190,12 @@ func TestSocketClient(t *testing.T) {
 		serverSeq: 1,
 	}
 
-	listenSock := NewListenSocket(NewNetwork(context.Background(), nil, NetworkOptions{Seq: args.serverSeq}))
-	connectSock := NewConnectSocket(
+	listenSock := NewSocket(NewNetwork(context.Background(), nil, NetworkOptions{Seq: args.serverSeq}))
+	InitListenSocket(listenSock)
+
+	connectSock := NewSocket(listenSock.network)
+	InitConnectSocket(
+		connectSock,
 		listenSock,
 		net.ParseIP(args.dstIp),
 		args.dstPort,
