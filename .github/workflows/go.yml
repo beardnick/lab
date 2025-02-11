@@ -5,22 +5,21 @@ name: Go
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 jobs:
-
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.22.2'
-      
-    - name: Test netstack
-      working-directory: ./network/netstack
-      run: sudo go test -v -race ./...
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.22.2"
+
+      - name: Test netstack
+        working-directory: ./network/netstack
+        run: sudo go test -v -race ./...
