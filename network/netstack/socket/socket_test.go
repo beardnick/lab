@@ -28,9 +28,17 @@ func TestSocketServer(t *testing.T) {
 		serverSeq: 1,
 	}
 
-	listenSock := NewSocket(NewNetwork(context.Background(), nil, NetworkOptions{Seq: args.serverSeq}))
+	network := NewNetwork(
+		context.Background(),
+		nil,
+		NetworkOptions{
+			Seq:   args.serverSeq,
+			Debug: true,
+		},
+	)
+	listenSock := NewSocket(network)
 	InitListenSocket(listenSock)
-	listenSock.acceptQueue = make(chan *Socket, defaultNetwork.opt.SoMaxConn)
+	listenSock.acceptQueue = make(chan *Socket, network.opt.SoMaxConn)
 
 	connectSock := NewSocket(listenSock.network)
 	InitConnectSocket(
