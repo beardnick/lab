@@ -36,7 +36,7 @@ func Bind(fd int, addr string) (err error) {
 	return defaultNetwork.bind(fd, addr)
 }
 
-func Listen(fd int, backlog int) (err error) {
+func Listen(fd int, backlog uint) (err error) {
 	if defaultNetwork == nil {
 		return ErrNoNetwork
 	}
@@ -91,11 +91,23 @@ var (
 	ErrNoSocket     = errors.New("no socket")
 )
 
+type IpLocalPortRange struct {
+	Start uint16
+	End   uint16
+}
+
+type NetIPV4Options struct {
+	IpLocalPortRange IpLocalPortRange // net.ipv4.ip_local_port_range
+	TcpMaxSynBacklog int              // net.ipv4.tcp_max_syn_backlog
+}
+
 type NetworkOptions struct {
+	NetIPV4Options
+	SoMaxConn uint // net.core.somaxconn
+
 	MTU        int
 	WindowSize uint16
 	Seq        uint32
-	Backlog    int
 	Debug      bool
 }
 
@@ -120,8 +132,15 @@ func NewNetwork(
 	if opt.WindowSize == 0 {
 		opt.WindowSize = 1024
 	}
-	if opt.Backlog == 0 {
-		opt.Backlog = 10
+	if opt.TcpMaxSynBacklog < 128 {
+		opt.TcpMaxSynBacklog = 4096
+	}
+	if opt.SoMaxConn < 128 {
+		opt.SoMaxConn = 4096
+	}
+	if opt.IpLocalPortRange.Start >= opt.IpLocalPortRange.End {
+		opt.IpLocalPortRange.Start = 32768
+		opt.IpLocalPortRange.End = 60999
 	}
 
 	return &Network{
@@ -263,7 +282,7 @@ func (n *Network) bind(fd int, addr string) (err error) {
 	return nil
 }
 
-func (n *Network) listen(fd int, backlog int) (err error) {
+func (n *Network) listen(fd int, backlog uint) (err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
 		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
@@ -396,7 +415,7 @@ func (n *Network) getAvailableAddress() (addr SocketAddr, err error) {
 	ip[3]++
 	localIp := ip.String()
 	var p uint16
-	for p = 1; p < 65535; p++ {
+	for p = n.opt.IpLocalPortRange.Start; p <= n.opt.IpLocalPortRange.End; p++ {
 		if _, ok := n.socketFds.Load(SocketAddr{DstIP: localIp, DstPort: p}); !ok {
 			return SocketAddr{
 				DstIP:   localIp,
@@ -467,7 +486,7 @@ func debugPacket(prefix string, data []byte) {
 		return
 	}
 	log.Printf(
-		"%s %s:%d -> %s:%d %v seq=%d ack=%d len=%d %s\n",
+		"%s %s:%d -> %s:%d %v seq=%d ack=%d len=%d win=%d %s\n",
 		prefix,
 		ipPack.SrcIP,
 		tcpPack.SrcPort,
@@ -477,6 +496,7 @@ func debugPacket(prefix string, data []byte) {
 		tcpPack.SequenceNumber,
 		tcpPack.AckNumber,
 		len(payload),
+		tcpPack.WindowSize,
 		hex.Dump(payload),
 	)
 }

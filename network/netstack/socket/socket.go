@@ -83,7 +83,6 @@ func NewSocket(network *Network) *Socket {
 func InitListenSocket(sock *Socket) {
 	sock.Lock()
 	defer sock.Unlock()
-	sock.acceptQueue = make(chan *Socket, sock.network.opt.Backlog)
 	sock.synQueue = sync.Map{}
 	sock.readCh = make(chan []byte)
 	sock.writeCh = make(chan *tcpip.IPPack)
@@ -111,8 +110,8 @@ func InitConnectSocket(
 	sock.State = tcpip.TcpStateClosed
 }
 
-func (s *Socket) Listen(backlog int) (err error) {
-	s.acceptQueue = make(chan *Socket, backlog)
+func (s *Socket) Listen(backlog uint) (err error) {
+	s.acceptQueue = make(chan *Socket, min(backlog, s.network.opt.SoMaxConn))
 	go s.runloop()
 	return nil
 }
@@ -673,7 +672,7 @@ func (s *Socket) sendBufferRemain() int {
 }
 
 func (s *Socket) connect() (err error) {
-	err = s.Listen(s.network.opt.Backlog)
+	err = s.Listen(1)
 	if err != nil {
 		return err
 	}
