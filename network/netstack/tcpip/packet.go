@@ -28,6 +28,7 @@ func OnesComplementSum(data []byte) uint16 {
 	var sum uint16
 	for i := 0; i < len(data); i += 2 {
 		sum += binary.BigEndian.Uint16(data[i : i+2])
+		// if sum is less than the current byte, it means there is a carry
 		if sum < binary.BigEndian.Uint16(data[i:i+2]) {
 			sum++ // handle carry
 		}
