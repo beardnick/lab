@@ -115,19 +115,12 @@ func (i *IPPack) Encode() ([]byte, error) {
 	return data, nil
 }
 
+// https://datatracker.ietf.org/doc/html/rfc1071#autoid-1
 func calculateIPChecksum(headerData []byte) uint16 {
-	var sum uint32
 	if len(headerData)%2 == 1 {
 		headerData = append(headerData, 0)
 	}
-	for i := 0; i < len(headerData); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(headerData[i : i+2]))
-	}
-
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-	return ^uint16(sum)
+	return ^OnesComplementSum(headerData)
 }
 
 func IsIPv4(data []byte) bool {

@@ -144,6 +144,7 @@ func (t *TcpPack) SetPseudoHeader(srcIP, dstIP []byte) {
 	t.PseudoHeader = &PseudoHeader{SrcIP: srcIP, DstIP: dstIP}
 }
 
+// https://datatracker.ietf.org/doc/html/rfc1071#autoid-1
 func calculateTcpChecksum(pseudo *PseudoHeader, headerPayloadData []byte) uint16 {
 	length := uint32(len(headerPayloadData))
 	pseudoHeader := make([]byte, 0)
@@ -160,16 +161,7 @@ func calculateTcpChecksum(pseudo *PseudoHeader, headerPayloadData []byte) uint16
 		sumData = append(sumData, 0)
 	}
 
-	var sum uint32
-	for i := 0; i < len(sumData); i += 2 {
-		sum += uint32(binary.BigEndian.Uint16(sumData[i : i+2]))
-	}
-
-	for sum>>16 != 0 {
-		sum = (sum & 0xffff) + (sum >> 16)
-	}
-
-	return ^uint16(sum)
+	return ^OnesComplementSum(sumData)
 }
 
 var flagMap = map[TcpFlag]string{
