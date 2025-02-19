@@ -34,10 +34,10 @@ func NewPacketBuilder(opt NetworkOptions) *PacketBuilder {
 }
 
 func (b *PacketBuilder) SetAddr(addr SocketAddr) *PacketBuilder {
-	srcIP := net.ParseIP(addr.SrcIP).To4()
-	dstIP := net.ParseIP(addr.DstIP).To4()
+	srcIP := net.ParseIP(addr.LocalIP).To4()
+	dstIP := net.ParseIP(addr.RemoteIP).To4()
 	if srcIP == nil || dstIP == nil {
-		b.err = fmt.Errorf("invalid IPv4 address: %s, %s", addr.SrcIP, addr.DstIP)
+		b.err = fmt.Errorf("invalid IPv4 address: %s, %s", addr.LocalIP, addr.RemoteIP)
 		return b
 	}
 	b.ip.IPHeader.SrcIP = srcIP
@@ -46,8 +46,8 @@ func (b *PacketBuilder) SetAddr(addr SocketAddr) *PacketBuilder {
 		SrcIP: b.ip.IPHeader.SrcIP,
 		DstIP: b.ip.IPHeader.DstIP,
 	}
-	b.tcp.TcpHeader.SrcPort = addr.SrcPort
-	b.tcp.TcpHeader.DstPort = addr.DstPort
+	b.tcp.TcpHeader.SrcPort = addr.LocalPort
+	b.tcp.TcpHeader.DstPort = addr.RemotePort
 	return b
 }
 

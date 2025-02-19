@@ -5,27 +5,27 @@ import (
 	"io"
 	"log"
 	"math/rand"
-	"net"
 	"netstack/tcpip"
 	"sync"
 	"time"
 )
 
 type SocketAddr struct {
-	SrcIP   string
-	SrcPort uint16
-	DstIP   string
-	DstPort uint16
+	LocalIP    string
+	RemoteIP   string
+	LocalPort  uint16
+	RemotePort uint16
 }
 
 type TcpSocket struct {
 	sync.Mutex
+	SocketAddr
 	fd int
 
-	localIP    string
-	remoteIP   string
-	localPort  uint16
-	remotePort uint16
+	// localIP    string
+	// remoteIP   string
+	// localPort  uint16
+	// remotePort uint16
 
 	network     *Network
 	acceptQueue chan *TcpSocket
@@ -92,18 +92,12 @@ func InitListenSocket(sock *TcpSocket) {
 func InitConnectSocket(
 	sock *TcpSocket,
 	listenSocket *TcpSocket,
-	localIP net.IP,
-	localPort uint16,
-	remoteIP net.IP,
-	remotePort uint16,
+	addr SocketAddr,
 ) {
 	sock.Lock()
 	defer sock.Unlock()
 	sock.listener = listenSocket
-	sock.localIP = localIP.String()
-	sock.remoteIP = remoteIP.String()
-	sock.localPort = localPort
-	sock.remotePort = remotePort
+	sock.SocketAddr = addr
 	sock.readCh = make(chan []byte, 1024)
 	sock.writeCh = make(chan *tcpip.IPPack)
 	sock.sendBuffer = make([]byte, 1024)
@@ -258,10 +252,12 @@ func (s *TcpSocket) handleNewSocket(ipPack *tcpip.IPPack, tcpPack *tcpip.TcpPack
 		InitConnectSocket(
 			sock,
 			s,
-			ipPack.DstIP,
-			tcpPack.DstPort,
-			ipPack.SrcIP,
-			tcpPack.SrcPort,
+			SocketAddr{
+				LocalIP:    ipPack.DstIP.String(),
+				LocalPort:  tcpPack.DstPort,
+				RemoteIP:   ipPack.SrcIP.String(),
+				RemotePort: tcpPack.SrcPort,
+			},
 		)
 	}
 	sock.handle(ipPack, tcpPack)
@@ -280,12 +276,7 @@ func (s *TcpSocket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err e
 	}
 
 	ipResp, tcpResp, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(seq).
 		SetAck(tcpPack.SequenceNumber + 1).
 		SetFlags(tcpip.TcpSYN | tcpip.TcpACK).
@@ -320,12 +311,7 @@ func (s *TcpSocket) handleSynResp(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, e
 	}
 	s.State = tcpip.TcpStateEstablished
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext - 1).
 		SetAck(tcpPack.SequenceNumber + 1).
 		SetFlags(tcpip.TcpACK).
@@ -348,7 +334,7 @@ func (s *TcpSocket) handleSynResp(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, e
 func (s *TcpSocket) handleFirstAck(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err error) {
 	s.State = tcpip.TcpStateEstablished
 	s.sendUnack = tcpPack.AckNumber
-	s.synQueue.Delete(s.remotePort)
+	s.synQueue.Delete(s.RemotePort)
 	select {
 	case s.listener.acceptQueue <- s:
 	default:
@@ -356,12 +342,7 @@ func (s *TcpSocket) handleFirstAck(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, 
 	}
 
 	s.network.addSocket(s)
-	s.network.bindSocket(SocketAddr{
-		SrcIP:   s.remoteIP,
-		SrcPort: s.remotePort,
-		DstIP:   s.localIP,
-		DstPort: s.localPort,
-	}, s.fd)
+	s.network.bindSocket(s.SocketAddr, s.fd)
 	go s.runloop()
 	return nil, nil
 }
@@ -389,12 +370,7 @@ func (s *TcpSocket) handleData(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err 
 	}
 
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext).
 		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpACK).
@@ -410,12 +386,7 @@ func (s *TcpSocket) handleFin() (resp *tcpip.IPPack, err error) {
 	s.recvNext += 1
 	s.State = tcpip.TcpStateCloseWait
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext).
 		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpACK).
@@ -432,12 +403,7 @@ func (s *TcpSocket) handleFin() (resp *tcpip.IPPack, err error) {
 func (s *TcpSocket) handleLastAck() {
 	s.State = tcpip.TcpStateClosed
 	s.network.removeSocket(s.fd)
-	s.network.unbindSocket(SocketAddr{
-		SrcIP:   s.remoteIP,
-		SrcPort: s.remotePort,
-		DstIP:   s.localIP,
-		DstPort: s.localPort,
-	})
+	s.network.unbindSocket(s.SocketAddr)
 }
 
 func (s *TcpSocket) handleFinWait1(
@@ -475,12 +441,7 @@ func (s *TcpSocket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPac
 	}
 
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext).
 		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpACK).
@@ -491,12 +452,7 @@ func (s *TcpSocket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPac
 
 	s.State = tcpip.TcpStateClosed
 	s.network.removeSocket(s.fd)
-	s.network.unbindSocket(SocketAddr{
-		SrcIP:   s.remoteIP,
-		SrcPort: s.remotePort,
-		DstIP:   s.localIP,
-		DstPort: s.localPort,
-	})
+	s.network.unbindSocket(s.SocketAddr)
 	return ipResp, nil
 }
 
@@ -550,12 +506,7 @@ func (s *TcpSocket) passiveCloseSocket() (ipResp *tcpip.IPPack, err error) {
 	s.State = tcpip.TcpStateLastAck
 
 	ipResp, tcpResp, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext).
 		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpFIN | tcpip.TcpACK).
@@ -574,12 +525,7 @@ func (s *TcpSocket) activeCloseSocket() (ipResp *tcpip.IPPack, err error) {
 	s.State = tcpip.TcpStateFinWait1
 
 	ipResp, tcpResp, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext).
 		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpFIN | tcpip.TcpACK).
@@ -610,12 +556,7 @@ func (s *TcpSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, err e
 	}
 
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(s.sendNext).
 		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpACK).
@@ -698,12 +639,7 @@ func (s *TcpSocket) activeConnect() (ipResp *tcpip.IPPack, err error) {
 		seq = s.network.opt.Seq
 	}
 	ipResp, tcpResp, err := NewPacketBuilder(s.network.opt).
-		SetAddr(SocketAddr{
-			SrcIP:   s.localIP,
-			SrcPort: s.localPort,
-			DstIP:   s.remoteIP,
-			DstPort: s.remotePort,
-		}).
+		SetAddr(s.SocketAddr).
 		SetSeq(seq).
 		SetFlags(tcpip.TcpSYN).
 		Build()

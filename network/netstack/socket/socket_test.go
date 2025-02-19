@@ -44,10 +44,12 @@ func TestSocketServer(t *testing.T) {
 	InitConnectSocket(
 		connectSock,
 		listenSock,
-		net.ParseIP(args.dstIp),
-		args.dstPort,
-		net.ParseIP(args.srcIp),
-		args.srcPort,
+		SocketAddr{
+			RemoteIP:   args.srcIp,
+			RemotePort: args.srcPort,
+			LocalIP:    args.dstIp,
+			LocalPort:  args.dstPort,
+		},
 	)
 	client := endpoint{ip: args.srcIp, port: args.srcPort, t: t}
 	server := endpoint{ip: args.dstIp, port: args.dstPort, t: t}
