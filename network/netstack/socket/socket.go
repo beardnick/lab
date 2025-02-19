@@ -275,18 +275,20 @@ func (s *TcpSocket) handleSyn(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, err e
 		seq = s.network.opt.Seq
 	}
 
-	ipResp, tcpResp, err := NewPacketBuilder(s.network.opt).
+	s.sendUnack = seq
+	s.sendNext = seq
+
+	ipResp, _, err := NewPacketBuilder(s.network.opt).
 		SetAddr(s.SocketAddr).
-		SetSeq(seq).
-		SetAck(tcpPack.SequenceNumber + 1).
+		SetSeq(s.sendNext).
+		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpSYN | tcpip.TcpACK).
 		Build()
 	if err != nil {
 		return nil, err
 	}
 
-	s.sendUnack = tcpResp.SequenceNumber
-	s.sendNext = tcpResp.SequenceNumber + 1
+	s.sendNext++
 
 	return ipResp, nil
 }
@@ -309,18 +311,20 @@ func (s *TcpSocket) handleSynResp(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPack, e
 				tcpPack.AckNumber,
 			)
 	}
+
 	s.State = tcpip.TcpStateEstablished
+	s.recvNext = tcpPack.SequenceNumber + 1
+
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
 		SetAddr(s.SocketAddr).
-		SetSeq(s.sendNext - 1).
-		SetAck(tcpPack.SequenceNumber + 1).
+		SetSeq(s.sendNext).
+		SetAck(s.recvNext).
 		SetFlags(tcpip.TcpACK).
 		Build()
 	if err != nil {
 		return nil, err
 	}
 	s.sendUnack++
-	s.recvNext = tcpPack.SequenceNumber + 1
 
 	select {
 	case s.listener.acceptQueue <- s:
@@ -638,17 +642,21 @@ func (s *TcpSocket) activeConnect() (ipResp *tcpip.IPPack, err error) {
 	} else {
 		seq = s.network.opt.Seq
 	}
-	ipResp, tcpResp, err := NewPacketBuilder(s.network.opt).
+
+	s.sendUnack = seq
+	s.sendNext = seq
+
+	ipResp, _, err = NewPacketBuilder(s.network.opt).
 		SetAddr(s.SocketAddr).
-		SetSeq(seq).
+		SetSeq(s.sendNext).
 		SetFlags(tcpip.TcpSYN).
 		Build()
 	if err != nil {
 		return nil, err
 	}
 
-	s.sendUnack = tcpResp.SequenceNumber
-	s.sendNext = tcpResp.SequenceNumber + 1
+	s.sendNext++
+
 	s.listener = s
 
 	return ipResp, nil
