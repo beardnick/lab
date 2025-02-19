@@ -43,7 +43,7 @@ func main() {
 	fmt.Printf("server start success %d, listen on: %s\n", serverFd, hostAddr)
 	for {
 		fmt.Println("accepting...")
-		connFd, err := socket.Accept(serverFd)
+		connFd, _, err := socket.Accept(serverFd)
 		if err != nil {
 			log.Println(err)
 			continue

@@ -110,11 +110,11 @@ func (s *TcpSocket) Listen(backlog uint) (err error) {
 	return nil
 }
 
-func (s *TcpSocket) Accept() (cfd int, err error) {
+func (s *TcpSocket) Accept() (cfd int, addr SocketAddr, err error) {
 	cs := <-s.acceptQueue
 	cs.Lock()
 	defer cs.Unlock()
-	return cs.fd, nil
+	return cs.fd, cs.SocketAddr, nil
 }
 
 func (s *TcpSocket) AcceptWithTimeout(timeout time.Duration) (cfd int, err error) {

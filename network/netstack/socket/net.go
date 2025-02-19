@@ -43,12 +43,12 @@ func Listen(fd int, backlog uint) (err error) {
 	return defaultNetwork.listen(fd, backlog)
 }
 
-func Accept(fd int) (cfd int, err error) {
+func Accept(fd int) (cfd int, addr SocketAddr, err error) {
 	if defaultNetwork == nil {
-		return 0, ErrNoNetwork
+		return 0, SocketAddr{}, ErrNoNetwork
 	}
-	cfd, err = defaultNetwork.accept(fd)
-	return cfd, err
+	cfd, addr, err = defaultNetwork.accept(fd)
+	return cfd, addr, err
 }
 
 func AcceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
@@ -292,12 +292,13 @@ func (n *Network) listen(fd int, backlog uint) (err error) {
 	return sock.Listen(backlog)
 }
 
-func (n *Network) accept(fd int) (cfd int, err error) {
+func (n *Network) accept(fd int) (cfd int, addr SocketAddr, err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return 0, fmt.Errorf("%w: %d", ErrNoSocket, fd)
+		return 0, SocketAddr{}, fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
-	return sock.Accept()
+	cfd, addr, err = sock.Accept()
+	return cfd, addr, err
 }
 
 func (n *Network) acceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
