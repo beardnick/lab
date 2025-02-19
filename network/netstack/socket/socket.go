@@ -20,26 +20,23 @@ type SocketAddr struct {
 type TcpSocket struct {
 	sync.Mutex
 	SocketAddr
+	State tcpip.TcpState
+
 	fd int
 
-	// localIP    string
-	// remoteIP   string
-	// localPort  uint16
-	// remotePort uint16
+	network  *Network
+	listener *TcpSocket
 
-	network     *Network
 	acceptQueue chan *TcpSocket
 	synQueue    sync.Map
-	readCh      chan []byte
-	writeCh     chan *tcpip.IPPack
 
-	listener   *TcpSocket
+	readCh  chan []byte
+	writeCh chan *tcpip.IPPack
+
 	recvNext   uint32
 	sendNext   uint32
 	sendUnack  uint32
 	sendBuffer []byte
-
-	State tcpip.TcpState
 }
 
 func NewSocket(network *Network) *TcpSocket {
@@ -47,38 +44,6 @@ func NewSocket(network *Network) *TcpSocket {
 		network: network,
 	}
 }
-
-// func NewListenSocket(network *Network) *Socket {
-// 	return &Socket{
-// 		network:     network,
-// 		synQueue:    sync.Map{},
-// 		acceptQueue: make(chan *Socket, network.opt.Backlog),
-// 		readCh:      make(chan []byte),
-// 		writeCh:     make(chan *tcpip.IPPack),
-// 		State:       tcpip.TcpStateListen,
-// 	}
-// }
-
-// func NewConnectSocket(
-// 	listenSocket *Socket,
-// 	localIP net.IP,
-// 	localPort uint16,
-// 	remoteIP net.IP,
-// 	remotePort uint16,
-// ) *Socket {
-// 	return &Socket{
-// 		network:    listenSocket.network,
-// 		listener:   listenSocket,
-// 		localIP:    localIP.String(),
-// 		remoteIP:   remoteIP.String(),
-// 		localPort:  localPort,
-// 		remotePort: remotePort,
-// 		State:      tcpip.TcpStateClosed,
-// 		readCh:     make(chan []byte, 1024),
-// 		writeCh:    make(chan *tcpip.IPPack),
-// 		sendBuffer: make([]byte, 1024),
-// 	}
-// }
 
 func InitListenSocket(sock *TcpSocket) {
 	sock.Lock()
