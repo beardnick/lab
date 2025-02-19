@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/sys/unix"
 )
 
 func EnsureNetwork() (err error) {
@@ -31,7 +32,7 @@ func NewServer(hostAddr string, handler tcpHandler) (server *Server, err error) 
 	if err := EnsureNetwork(); err != nil {
 		return nil, err
 	}
-	serverFd, err := Socket()
+	serverFd, err := Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +156,7 @@ func TestActiveConnection(t *testing.T) {
 		l.Close()
 	}()
 
-	cfd, err := Socket()
+	cfd, err := Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
 	assert.NoError(t, err)
 
 	assert.NoError(t, Connect(cfd, serverAddr))

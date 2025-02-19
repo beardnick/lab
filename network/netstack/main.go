@@ -27,7 +27,7 @@ func main() {
 		panic(err)
 	}
 	socket.SetupDefaultNetwork(context.Background(), tun, socket.NetworkOptions{Debug: true})
-	serverFd, err := socket.Socket()
+	serverFd, err := socket.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
 	if err != nil {
 		panic(err)
 	}

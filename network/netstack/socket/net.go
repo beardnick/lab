@@ -20,7 +20,7 @@ type SockFile interface {
 	Write(b []byte) (n int, err error)
 }
 
-func Socket() (fd int, err error) {
+func Socket(domain int, typ int, protocol int) (fd int, err error) {
 	if defaultNetwork == nil {
 		return 0, ErrNoNetwork
 	}
@@ -47,7 +47,8 @@ func Accept(fd int) (cfd int, err error) {
 	if defaultNetwork == nil {
 		return 0, ErrNoNetwork
 	}
-	return defaultNetwork.accept(fd)
+	cfd, err = defaultNetwork.accept(fd)
+	return cfd, err
 }
 
 func AcceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
