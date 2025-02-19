@@ -27,7 +27,7 @@ func main() {
 		panic(err)
 	}
 	socket.SetupDefaultNetwork(context.Background(), tun, socket.NetworkOptions{Debug: true})
-	serverFd, err := socket.TcpSocket()
+	serverFd, err := socket.Socket()
 	if err != nil {
 		panic(err)
 	}

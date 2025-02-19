@@ -20,7 +20,7 @@ type SockFile interface {
 	Write(b []byte) (n int, err error)
 }
 
-func TcpSocket() (fd int, err error) {
+func Socket() (fd int, err error) {
 	if defaultNetwork == nil {
 		return 0, ErrNoNetwork
 	}
@@ -375,7 +375,7 @@ func (n *Network) connect(fd int, serverAddr string) (err error) {
 	return sock.Connect()
 }
 
-func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
+func (n *Network) getSocket(addr SocketAddr) (sock *TcpSocket, ok bool) {
 	value, ok := n.socketFds.Load(addr)
 	if ok {
 		return n.getSocketByFd(value.(int))
@@ -391,12 +391,12 @@ func (n *Network) getSocket(addr SocketAddr) (sock *Socket, ok bool) {
 	return nil, false
 }
 
-func (n *Network) getSocketByFd(fd int) (sock *Socket, ok bool) {
+func (n *Network) getSocketByFd(fd int) (sock *TcpSocket, ok bool) {
 	f, ok := n.sockets.Load(fd)
 	if !ok {
 		return nil, false
 	}
-	sock = f.(*Socket)
+	sock = f.(*TcpSocket)
 	return sock, true
 }
 
@@ -436,7 +436,7 @@ func (n *Network) applyFd() (fd int) {
 	}
 }
 
-func (n *Network) addSocket(f *Socket) (fd int) {
+func (n *Network) addSocket(f *TcpSocket) (fd int) {
 	n.Lock()
 	defer n.Unlock()
 	f.fd = n.applyFd()

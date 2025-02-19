@@ -31,7 +31,7 @@ func NewServer(hostAddr string, handler tcpHandler) (server *Server, err error) 
 	if err := EnsureNetwork(); err != nil {
 		return nil, err
 	}
-	serverFd, err := TcpSocket()
+	serverFd, err := Socket()
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func TestActiveConnection(t *testing.T) {
 		l.Close()
 	}()
 
-	cfd, err := TcpSocket()
+	cfd, err := Socket()
 	assert.NoError(t, err)
 
 	assert.NoError(t, Connect(cfd, serverAddr))
