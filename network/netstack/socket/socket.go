@@ -589,7 +589,7 @@ func (s *TcpSocket) checkSeqAck(tcpPack *tcpip.TcpPack) (valid bool) {
 	if s.sendUnack == s.sendNext {
 		return tcpPack.AckNumber == s.sendNext
 	}
-	return tcpPack.AckNumber >= s.sendUnack && tcpPack.AckNumber <= s.sendNext
+	return tcpPack.AckNumber > s.sendUnack && tcpPack.AckNumber <= s.sendNext
 }
 
 func (s *TcpSocket) cacheSendData(data []byte) int {
