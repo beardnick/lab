@@ -518,7 +518,6 @@ func (s *TcpSocket) handleSend(data []byte) (send int, resp *tcpip.IPPack, err e
 		return 0, nil, nil
 	}
 
-	log.Println("handle send data", len(data), string(data))
 	send = s.cacheSendData(data)
 	if send == 0 {
 		return 0, nil, nil
