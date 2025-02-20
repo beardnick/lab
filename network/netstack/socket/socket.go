@@ -397,16 +397,16 @@ func (s *TcpSocket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPac
 	if err != nil {
 		return nil, fmt.Errorf("encode tcp payload failed %w", err)
 	}
-	if len(data) == 0 {
-		return nil, nil
-	}
+
 	// +1 for FIN
 	s.recvNext = s.recvNext + uint32(len(data)) + 1
 
-	select {
-	case s.readCh <- data:
-	default:
-		return nil, fmt.Errorf("the reader queue is full, drop the data")
+	if len(data) > 0 {
+		select {
+		case s.readCh <- data:
+		default:
+			return nil, fmt.Errorf("the reader queue is full, drop the data")
+		}
 	}
 
 	ipResp, _, err := NewPacketBuilder(s.network.opt).
@@ -422,6 +422,7 @@ func (s *TcpSocket) handleFinWait2Fin(tcpPack *tcpip.TcpPack) (resp *tcpip.IPPac
 	s.State = tcpip.TcpStateClosed
 	s.network.removeSocket(s.fd)
 	s.network.unbindSocket(s.SocketAddr)
+	close(s.readCh)
 	return ipResp, nil
 }
 
