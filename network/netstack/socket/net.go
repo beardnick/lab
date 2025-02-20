@@ -20,7 +20,7 @@ type SockFile interface {
 	Write(b []byte) (n int, err error)
 }
 
-func Socket() (fd int, err error) {
+func Socket(domain int, typ int, protocol int) (fd int, err error) {
 	if defaultNetwork == nil {
 		return 0, ErrNoNetwork
 	}
@@ -43,11 +43,12 @@ func Listen(fd int, backlog uint) (err error) {
 	return defaultNetwork.listen(fd, backlog)
 }
 
-func Accept(fd int) (cfd int, err error) {
+func Accept(fd int) (cfd int, addr SocketAddr, err error) {
 	if defaultNetwork == nil {
-		return 0, ErrNoNetwork
+		return 0, SocketAddr{}, ErrNoNetwork
 	}
-	return defaultNetwork.accept(fd)
+	cfd, addr, err = defaultNetwork.accept(fd)
+	return cfd, addr, err
 }
 
 func AcceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
@@ -239,10 +240,10 @@ func (n *Network) handle(data []byte) {
 	tcpPack := ipPack.Payload.(*tcpip.TcpPack)
 	sock, ok := n.getSocket(
 		SocketAddr{
-			SrcIP:   ipPack.SrcIP.String(),
-			SrcPort: tcpPack.SrcPort,
-			DstIP:   ipPack.DstIP.String(),
-			DstPort: tcpPack.DstPort,
+			RemoteIP:   ipPack.SrcIP.String(),
+			RemotePort: tcpPack.SrcPort,
+			LocalIP:    ipPack.DstIP.String(),
+			LocalPort:  tcpPack.DstPort,
 		},
 	)
 	if !ok {
@@ -250,7 +251,7 @@ func (n *Network) handle(data []byte) {
 	}
 	sock.Lock()
 	if sock.State == tcpip.TcpStateUnInitialized {
-		log.Printf("socket %s:%d is not initialized,drop packet", sock.localIP, sock.localPort)
+		log.Printf("socket %s:%d is not initialized,drop packet", sock.LocalIP, sock.LocalPort)
 		sock.Unlock()
 		return
 	}
@@ -258,7 +259,7 @@ func (n *Network) handle(data []byte) {
 	select {
 	case sock.writeCh <- ipPack:
 	default:
-		log.Printf("socket %s:%d is full,drop packet", sock.localIP, sock.localPort)
+		log.Printf("socket %s:%d is full,drop packet", sock.LocalIP, sock.LocalPort)
 	}
 }
 
@@ -273,11 +274,11 @@ func (n *Network) bind(fd int, addr string) (err error) {
 	if !ok {
 		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
-	sock.localIP = ip.String()
-	sock.localPort = port
+	sock.LocalIP = ip.String()
+	sock.LocalPort = port
 	n.bindSocket(SocketAddr{
-		DstIP:   ip.String(),
-		DstPort: port,
+		LocalIP:   ip.String(),
+		LocalPort: port,
 	}, fd)
 	return nil
 }
@@ -291,12 +292,13 @@ func (n *Network) listen(fd int, backlog uint) (err error) {
 	return sock.Listen(backlog)
 }
 
-func (n *Network) accept(fd int) (cfd int, err error) {
+func (n *Network) accept(fd int) (cfd int, addr SocketAddr, err error) {
 	sock, ok := n.getSocketByFd(fd)
 	if !ok {
-		return 0, fmt.Errorf("%w: %d", ErrNoSocket, fd)
+		return 0, SocketAddr{}, fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
-	return sock.Accept()
+	cfd, addr, err = sock.Accept()
+	return cfd, addr, err
 }
 
 func (n *Network) acceptWithTimeout(fd int, timeout time.Duration) (cfd int, err error) {
@@ -344,34 +346,25 @@ func (n *Network) connect(fd int, serverAddr string) (err error) {
 		return fmt.Errorf("%w: %d", ErrNoSocket, fd)
 	}
 	var addr SocketAddr
-	if sock.localIP == "" && sock.localPort == 0 {
+	if sock.LocalIP == "" && sock.LocalPort == 0 {
 		addr, err = n.getAvailableAddress()
 		if err != nil {
 			return err
 		}
-		sock.localIP = addr.DstIP
-		sock.localPort = addr.DstPort
 	} else {
 		n.unbindSocket(SocketAddr{
-			DstIP:   sock.localIP,
-			DstPort: sock.localPort,
+			LocalIP:   sock.LocalIP,
+			LocalPort: sock.LocalPort,
 		})
 		addr = SocketAddr{
-			DstIP:   sock.localIP,
-			DstPort: sock.localPort,
+			LocalIP:   sock.LocalIP,
+			LocalPort: sock.LocalPort,
 		}
 	}
-	addr.SrcIP = serverIP.String()
-	addr.SrcPort = serverPort
+	addr.RemoteIP = serverIP.String()
+	addr.RemotePort = serverPort
 	n.bindSocket(addr, fd)
-	InitConnectSocket(
-		sock,
-		nil,
-		net.ParseIP(sock.localIP),
-		sock.localPort,
-		serverIP,
-		serverPort,
-	)
+	InitConnectSocket(sock, nil, addr)
 	return sock.Connect()
 }
 
@@ -381,8 +374,8 @@ func (n *Network) getSocket(addr SocketAddr) (sock *TcpSocket, ok bool) {
 		return n.getSocketByFd(value.(int))
 	}
 	newAddr := SocketAddr{
-		DstIP:   addr.DstIP,
-		DstPort: addr.DstPort,
+		LocalIP:   addr.LocalIP,
+		LocalPort: addr.LocalPort,
 	}
 	value, ok = n.socketFds.Load(newAddr)
 	if ok {
@@ -416,11 +409,9 @@ func (n *Network) getAvailableAddress() (addr SocketAddr, err error) {
 	localIp := ip.String()
 	var p uint16
 	for p = n.opt.IpLocalPortRange.Start; p <= n.opt.IpLocalPortRange.End; p++ {
-		if _, ok := n.socketFds.Load(SocketAddr{DstIP: localIp, DstPort: p}); !ok {
-			return SocketAddr{
-				DstIP:   localIp,
-				DstPort: p,
-			}, nil
+		addr := SocketAddr{LocalIP: localIp, LocalPort: p}
+		if _, ok := n.socketFds.Load(addr); !ok {
+			return addr, nil
 		}
 	}
 	return SocketAddr{}, fmt.Errorf("no available address")

@@ -27,7 +27,7 @@ func main() {
 		panic(err)
 	}
 	socket.SetupDefaultNetwork(context.Background(), tun, socket.NetworkOptions{Debug: true})
-	serverFd, err := socket.Socket()
+	serverFd, err := socket.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
 	if err != nil {
 		panic(err)
 	}
@@ -43,7 +43,7 @@ func main() {
 	fmt.Printf("server start success %d, listen on: %s\n", serverFd, hostAddr)
 	for {
 		fmt.Println("accepting...")
-		connFd, err := socket.Accept(serverFd)
+		connFd, _, err := socket.Accept(serverFd)
 		if err != nil {
 			log.Println(err)
 			continue
