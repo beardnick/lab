@@ -14,7 +14,7 @@ global_asm!(include_str!("entry.asm"));
 // no_mangle avoid confusing rust_main name
 // rust_main name will keep in asm
 #[no_mangle]
-pub fn rust_main() -> !{
+pub fn rust_main() -> ! {
     clear_bss();
     println!("hello world");
     panic!("shutdown");
@@ -27,17 +27,13 @@ pub fn rust_main() -> !{
 //    panic!("shutdown");
 //}
 
-
-pub fn clear_bss(){
+pub fn clear_bss() {
     extern "C" {
-         // find sbss ebss symbol from extern program,  provided by linker.ld
+        // find sbss ebss symbol from extern program,  provided by linker.ld
         fn sbss();
         fn ebss();
     }
     // rust range expression
     // write 0 to range [sbss , ebss)
-    (sbss as usize .. ebss as usize).for_each(|a|{
-        unsafe {(a as *mut u8).write_volatile(0)}
-    })
+    (sbss as usize..ebss as usize).for_each(|a| unsafe { (a as *mut u8).write_volatile(0) })
 }
-
